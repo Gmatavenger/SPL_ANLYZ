@@ -1,0 +1,9 @@
+# Core requirements for Splunk Dashboard Automation App
+tkcalendar
+pytz
+playwright
+cryptography
+Pillow
+keyring
+# Optional: For logging rotation (usually part of Python stdlib, so not needed separately)
+# logging
