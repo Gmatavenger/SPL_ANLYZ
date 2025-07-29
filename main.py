@@ -1,5 +1,5 @@
 import tkinter as tk
-# from splunk_automator.gui import SplunkAutomatorApp
+
 try:
     from splunk_automator.gui import SplunkAutomatorApp
 except ImportError:

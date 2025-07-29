@@ -1,6 +1,6 @@
 import json
 import os
-from .splunk_automator.config import Config
+from .config import Config
 from .logging_setup import logger
 
 def load_dashboards():
