@@ -2,7 +2,7 @@ import os
 import io
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
-from .config import Config
+from .splunk_automator.config import Config
 from .logging_setup import logger
 
 def save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str:

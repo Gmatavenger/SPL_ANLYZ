@@ -1,7 +1,7 @@
 import tkinter as tk
 # from splunk_automator.gui import SplunkAutomatorApp
 try:
-    from gui import SplunkAutomatorApp
+    from splunk_automator.gui import SplunkAutomatorApp
 except ImportError:
     print("Failed to import SplunkAutomatorApp from gui.")
     raise

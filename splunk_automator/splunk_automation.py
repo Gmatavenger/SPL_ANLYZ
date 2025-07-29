@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from .config import Config
+from .splunk_automator.config import Config
 from .screenshot import save_screenshot_to_tmp
 from .logging_setup import logger
 

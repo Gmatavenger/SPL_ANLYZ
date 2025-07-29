@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 import re
 
-from .config import Config
+from splunk_automator.config import Config
 from .logging_setup import logger
 from .credentials import load_credentials, save_credentials
 from .dashboard import (

@@ -2,7 +2,7 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from .config import Config
+from splunk_automator.config import Config
 
 def setup_logger():
     os.makedirs(Config.LOG_DIR, exist_ok=True)
