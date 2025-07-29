@@ -13,3 +13,407 @@ my_splunk_app/
     ├── time_range.py
     ├── gui.py
     ├── splunk_automation.py
+
+
+Method Name/Function				Class/Context						One-line Description
+ensure_dirs							module-level						Ensures required directories (logs, tmp, screenshots) exist.
+archive_and_clean_tmp				module-level						Moves old tmp folders to archive and cleans up stray files.
+purge_old_archives					module-level						Deletes screenshot archives older than the configured retention period.
+save_screenshot_to_tmp				module-level						Saves screenshot with timestamp overlay to tmp directory.
+load_credentials					module-level						Loads Splunk credentials, either from encrypted file or keyring.
+get_key								module-level						Loads or generates encryption key for credentials.
+save_credentials					module-level						Encrypts and saves Splunk credentials.
+on_closing							module-level						Handles main window/application close event.
+init								TimeRangeDialog						Sets up the time range selection dialog UI.
+show_selected_frame					TimeRangeDialog						Switches between different time range input frames in the dialog.
+build_presets_frame					TimeRangeDialog						Builds the UI for preset Splunk time ranges.
+build_relative_frame				TimeRangeDialog						Builds UI for user-defined relative time selection.
+build_date_range_frame				TimeRangeDialog						Builds UI for selecting a specific date range (no time).
+build_datetime_range_frame			TimeRangeDialog						Builds UI for selecting a date and time range.
+build_advanced_frame				TimeRangeDialog						Builds UI for entering epoch-based time range.
+select_preset						TimeRangeDialog						Sets chosen preset as dialog result and closes dialog.
+on_apply							TimeRangeDialog						Validates and applies selected time range, then closes dialog.
+parse_time							TimeRangeDialog						Parses time string (HH:MM or HH:MM:SS) into a time object.
+init								SplunkAutomatorApp					Initializes application, loads settings/dashboards/credentials, builds UI.
+_setup_ui							SplunkAutomatorApp					Sets up all GUI widgets, menus, and layout.
+update_status						SplunkAutomatorApp					Updates the status bar and logs a message.
+manage_credentials					SplunkAutomatorApp					Dialog for entering/updating Splunk credentials securely.
+add_dashboard						SplunkAutomatorApp					Dialog to add a new dashboard entry (with duplicate prevention and validation).
+delete_dashboard					SplunkAutomatorApp					Deletes selected dashboards from the list.
+select_all_dashboards				SplunkAutomatorApp					Marks all dashboards as selected.
+deselect_all_dashboards				SplunkAutomatorApp					Deselects all dashboards.
+toggle_selection					SplunkAutomatorApp					Toggles selection state for a dashboard from treeview click.
+load_dashboards						SplunkAutomatorApp					Loads dashboards from the dashboards.json file.
+save_dashboards						SplunkAutomatorApp					Saves dashboard list (excluding transient keys) to file.
+refresh_dashboard_list				SplunkAutomatorApp					Updates the treeview to show current dashboards and their selection/status.
+update_group_filter					SplunkAutomatorApp					Updates the group filter dropdown based on current dashboard groups.
+export_results						SplunkAutomatorApp					Exports dashboard names, URLs, groups, and statuses as a CSV file.
+load_settings						SplunkAutomatorApp					Loads app UI geometry, last group, and other persistent settings.
+save_settings						SplunkAutomatorApp					Saves current app UI and dashboard selection state to settings file.
+run_analysis_thread					SplunkAutomatorApp					Starts dashboard analysis workflow in a new thread (with archiving and time-range prompts).
+analyze_dashboards_async			SplunkAutomatorApp					Coroutine: Runs browser sessions, processes dashboards in parallel with retries.
+process_single_dashboard			SplunkAutomatorApp					Coroutine: Loads a dashboard, logs in if needed, waits for panels, takes screenshot (Classic/Studio).
+_wait_for_splunk_dashboard_to_load	SplunkAutomatorApp					Coroutine: Determines dashboard type, waits for panels/data to fully load, handles stabilization.
+format_time_for_url					SplunkAutomatorApp					Constructs dashboard URL with correct time parameters for Classic or Studio.
+update_dashboard_status				SplunkAutomatorApp					Updates the dashboard status in the treeview and in memory.
+_update_status_in_ui				SplunkAutomatorApp					Helper to update status in the treeview UI.
+update_progress						SplunkAutomatorApp					Updates the progress bar to reflect current progress.
+_update_progress_in_ui				SplunkAutomatorApp					Helper to update the progress bar in the UI.
+handle_login_failure				SplunkAutomatorApp					Prompts for credentials if login fails.
+configure_schedule					SplunkAutomatorApp					Dialog for configuring scheduled dashboard analysis.
+start_schedule_if_exists			SplunkAutomatorApp					Loads and starts scheduled analysis if a schedule config file exists.
+run_scheduled_analysis				SplunkAutomatorApp					Runs scheduled analysis as a background thread based on config.
+schedule_analysis					SplunkAutomatorApp					Initiates the schedule configuration workflow.
+cancel_scheduled_analysis			SplunkAutomatorApp					Cancels scheduled analysis and deletes the schedule file.
+post_run_cleanup					SplunkAutomatorApp					Purges old screenshot archives after a run.
+capture_screenshots_thread			SplunkAutomatorApp					Starts a thread to capture screenshots only (no analysis), prompts for time range.
+_capture_screenshots_async			SplunkAutomatorApp					Coroutine: Captures screenshots for selected dashboards in parallel.
+
+
+
+
+spl_anz_v5.py — Granular Method Listing
+Top-Level Functions (Module-Level)
+ensure_dirs()
+Ensure required directories exist.
+archive_and_clean_tmp()
+Move/clean temporary and screenshot archive folders.
+purge_old_archives()
+Remove screenshot archives older than retention period.
+save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str
+Save screenshot with timestamp overlay.
+load_credentials()
+Load encrypted Splunk credentials.
+get_key()
+Get or generate Fernet encryption key.
+save_credentials(username, password)
+Save encrypted Splunk credentials.
+on_closing()
+Handle application close event.
+class TimeRangeDialog(Toplevel)
+init(self, parent)
+show_selected_frame(self)
+build_presets_frame(self, parent)
+build_relative_frame(self, parent)
+build_date_range_frame(self, parent)
+build_datetime_range_frame(self, parent)
+build_advanced_frame(self, parent)
+select_preset(self, preset)
+on_apply(self)
+parse_time(self, time_str: str) -> dt_time
+class SplunkAutomatorApp
+Initialization/UI
+init(self, master: tk.Tk)
+_setup_ui(self)
+update_status(self, msg: str, level: str = "info")
+Credentials and Dashboard Management
+manage_credentials(self, first_time: bool = False)
+add_dashboard(self)
+delete_dashboard(self)
+select_all_dashboards(self)
+deselect_all_dashboards(self)
+toggle_selection(self, event)
+load_dashboards(self)
+save_dashboards(self)
+refresh_dashboard_list(self)
+update_group_filter(self)
+export_results(self)
+load_settings(self) -> dict
+save_settings(self)
+Analysis, Automation, and Scheduling
+run_analysis_thread(self, scheduled_run=False, schedule_config=None)
+analyze_dashboards_async(self, dashboards, start_dt, end_dt, retries=3)
+process_single_dashboard(self, playwright, db_data, start_dt, end_dt)
+_wait_for_splunk_dashboard_to_load(self, page, name)
+format_time_for_url(self, base_url: str, start_dt, end_dt, is_studio=False) -> str
+update_dashboard_status(self, name: str, status: str)
+_update_status_in_ui(self, name: str, status: str)
+update_progress(self, value: int, maximum: int | None = None)
+_update_progress_in_ui(self, value: int, maximum: int | None)
+handle_login_failure(self)
+configure_schedule(self)
+start_schedule_if_exists(self)
+run_scheduled_analysis(self, schedule_config=None)
+schedule_analysis(self)
+cancel_scheduled_analysis(self)
+post_run_cleanup(self)
+spl_anz_v6.py — Granular Method Listing
+Top-Level Functions (Module-Level)
+ensure_dirs()
+archive_and_clean_tmp()
+purge_old_archives()
+save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str
+get_key()
+save_credentials(username: str, password: str) -> bool
+load_credentials()
+on_closing()
+class TimeRangeDialog(Toplevel)
+(Implementation is referenced as unchanged — so same methods as in v5.)
+
+class SplunkAutomatorApp
+Initialization/UI
+init(self, master: tk.Tk)
+_setup_ui(self)
+Dashboard Management
+add_dashboard(self)
+Screenshot/Analysis Flows
+capture_screenshots_thread(self)
+_capture_screenshots_async(self, dashboards, start_dt, end_dt)
+process_single_dashboard(self, playwright, db_data, start_dt, end_dt, capture_only=False)
+_wait_for_splunk_dashboard_to_load(self, page, name)
+format_time_for_url(self, base_url: str, start_dt, end_dt, is_studio=False) -> str
+(Plus all other methods referenced as “unchanged” from v5, e.g. settings, dashboard management, scheduling, etc.)
+
+Certainly! Here is a detailed, granular listing of all functions and methods in both spl_anz_v5.py and spl_anz_v6.py, grouped by class and context, including arguments, purpose, and (where relevant) input/output types.
+
+---
+
+# spl_anz_v5.py — Detailed Method/Function List
+
+## Top-Level Functions (Module-Level)
+
+1. **ensure_dirs()**
+   - Purpose: Ensures that required directories (logs, tmp, screenshots) exist.
+
+2. **archive_and_clean_tmp()**
+   - Purpose: Moves all subfolders in tmp (except today’s) to the screenshot archive folder and cleans up stray files.
+
+3. **purge_old_archives()**
+   - Purpose: Deletes content of screenshot archive folders older than the configured retention period (DAYS_TO_KEEP).
+
+4. **save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str**
+   - Purpose: Saves screenshot bytes to today's tmp directory, overlays timestamp, and returns the file path.
+
+5. **load_credentials() -> (str|None, str|None)**
+   - Purpose: Loads encrypted Splunk credentials from a local .secrets file.
+
+6. **get_key() -> bytes**
+   - Purpose: Loads or generates a symmetric encryption key for credential encryption.
+
+7. **save_credentials(username: str, password: str)**
+   - Purpose: Encrypts and saves Splunk credentials to a local file.
+
+8. **on_closing()**
+   - Purpose: Handles application close event (asks for confirmation).
+
+---
+
+## class TimeRangeDialog(Toplevel)
+
+- **__init__(self, parent)**
+  - Sets up the modal dialog for user time range selection.
+
+- **show_selected_frame(self)**
+  - Displays the current selected time range input frame.
+
+- **build_presets_frame(self, parent)**
+  - Constructs the UI for Splunk preset time ranges.
+
+- **build_relative_frame(self, parent)**
+  - Constructs the UI for user-defined relative time ranges.
+
+- **build_date_range_frame(self, parent)**
+  - Constructs the UI for selecting a fixed date range (no time).
+
+- **build_datetime_range_frame(self, parent)**
+  - Constructs the UI for selecting a fixed date & time range.
+
+- **build_advanced_frame(self, parent)**
+  - Constructs the UI for entering start/end times as epochs.
+
+- **select_preset(self, preset)**
+  - Sets the dialog's result to the preset's time range and closes the dialog.
+
+- **on_apply(self)**
+  - Validates and extracts the chosen time range, sets result, closes dialog.
+
+- **parse_time(self, time_str: str) -> dt_time**
+  - Parses a string (HH:MM or HH:MM:SS) to a time object.
+
+---
+
+## class SplunkAutomatorApp
+
+### Initialization and UI Setup
+- **__init__(self, master: tk.Tk)**
+  - Initializes app, loads settings/dashboards/credentials, sets up UI.
+
+- **_setup_ui(self)**
+  - Constructs all main GUI widgets and menus.
+
+- **update_status(self, msg: str, level: str = "info")**
+  - Updates status bar and logs.
+
+### Credentials and Dashboard Management
+- **manage_credentials(self, first_time: bool = False)**
+  - Dialog for entering Splunk credentials.
+
+- **add_dashboard(self)**
+  - Dialog to add a new dashboard entry (name, URL, group).
+
+- **delete_dashboard(self)**
+  - Deletes selected dashboards from the list and updates file.
+
+- **select_all_dashboards(self)**
+  - Sets all dashboards as selected.
+
+- **deselect_all_dashboards(self)**
+  - Deselects all dashboards.
+
+- **toggle_selection(self, event)**
+  - Toggles the selected state of a dashboard via treeview click.
+
+- **load_dashboards(self)**
+  - Loads dashboards from the dashboards.json file.
+
+- **save_dashboards(self)**
+  - Saves current dashboards to file, omitting transient keys.
+
+- **refresh_dashboard_list(self)**
+  - Updates the treeview list of dashboards, reflecting current selection/filter.
+
+- **update_group_filter(self)**
+  - Updates the group filter dropdown based on dashboard groups.
+
+- **export_results(self)**
+  - Exports the dashboard list/status as CSV.
+
+- **load_settings(self) -> dict**
+  - Loads UI window geometry, last group, etc. from settings file.
+
+- **save_settings(self)**
+  - Saves UI state and last selections.
+
+### Analysis and Automation
+- **run_analysis_thread(self, scheduled_run=False, schedule_config=None)**
+  - Kicks off analysis in a new thread after archiving and time range selection.
+
+- **analyze_dashboards_async(self, dashboards, start_dt, end_dt, retries=3)**
+  - Coroutine: Launches browser(s) and processes dashboards, with retry logic.
+
+- **process_single_dashboard(self, playwright, db_data, start_dt, end_dt)**
+  - Coroutine: Handles navigation, login, wait logic, and screenshot for a single dashboard.
+  - Detects Splunk Classic vs Studio and uses appropriate waits and screenshot logic.
+
+- **_wait_for_splunk_dashboard_to_load(self, page, name) -> bool**
+  - Coroutine: Waits for Splunk dashboard panels to fully load; returns True for Studio, False for Classic.
+  - Handles Studio JS waits, Classic export button waits, and stabilization.
+
+- **format_time_for_url(self, base_url: str, start_dt, end_dt, is_studio=False) -> str**
+  - Formats the dashboard URL with the appropriate time parameters for Classic/Studio.
+
+### Status/Progress
+- **update_dashboard_status(self, name: str, status: str)**
+  - Updates dashboard status in the treeview and in-memory list.
+
+- **_update_status_in_ui(self, name: str, status: str)**
+  - Helper to actually update the treeview row.
+
+- **update_progress(self, value: int, maximum: int | None = None)**
+  - Updates the progress bar.
+
+- **_update_progress_in_ui(self, value: int, maximum: int | None)**
+  - Helper for progress bar update.
+
+- **handle_login_failure(self)**
+  - Handles failed login by prompting for credentials.
+
+### Scheduling
+- **configure_schedule(self)**
+  - Dialog for configuring scheduled analysis (interval, dashboards, time range, retries).
+
+- **start_schedule_if_exists(self)**
+  - Loads and starts scheduled analysis if config file exists.
+
+- **run_scheduled_analysis(self, schedule_config=None)**
+  - Runs scheduled analysis as a thread with the given config.
+
+- **schedule_analysis(self)**
+  - Starts scheduling workflow.
+
+- **cancel_scheduled_analysis(self)**
+  - Cancels any scheduled analysis and removes schedule file.
+
+- **post_run_cleanup(self)**
+  - Purges old archives after a run.
+
+---
+
+# spl_anz_v6.py — Detailed Method/Function List
+
+## Top-Level Functions (Module-Level)
+
+- **ensure_dirs()**
+- **archive_and_clean_tmp()**
+- **purge_old_archives()**
+- **save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str**
+- **get_key()**
+- **save_credentials(username: str, password: str) -> bool**
+- **load_credentials()**
+- **on_closing()**
+
+_These are essentially the same as v5, except save_screenshot_to_tmp handles font fallback more robustly._
+
+---
+
+## class TimeRangeDialog(Toplevel)
+
+- **__init__(self, parent)**
+- **show_selected_frame(self)**
+- **build_presets_frame(self, parent)**
+- **build_relative_frame(self, parent)**
+- **build_date_range_frame(self, parent)**
+- **build_datetime_range_frame(self, parent)**
+- **build_advanced_frame(self, parent)**
+- **select_preset(self, preset)**
+- **on_apply(self)**
+- **parse_time(self, time_str: str) -> dt_time**
+
+_Identical to v5._
+
+---
+
+## class SplunkAutomatorApp
+
+### Initialization and UI Setup
+- **__init__(self, master: tk.Tk)**
+- **_setup_ui(self)**
+
+### Dashboard Management
+- **add_dashboard(self)**
+  - Enhanced: Validates input, uses dropdown for group, and prevents duplicates.
+
+### Capture Flow (v6 Specific)
+- **capture_screenshots_thread(self)**
+  - Starts a thread to capture screenshots only (no analysis), prompts for time range.
+
+- **_capture_screenshots_async(self, dashboards, start_dt, end_dt)**
+  - Coroutine: Browser session for capturing screenshots of multiple dashboards in parallel.
+
+- **process_single_dashboard(self, playwright, db_data, start_dt, end_dt, capture_only=False)**
+  - Coroutine: Handles navigation, login, dashboard-type detection, screenshot, and saving.
+  - If capture_only is True, skips any analysis logic.
+
+- **_wait_for_splunk_dashboard_to_load(self, page, name)**
+  - Coroutine: Detects Classic vs Studio, waits for load, and stabilizes DOM.
+
+- **format_time_for_url(self, base_url: str, start_dt, end_dt, is_studio=False) -> str**
+  - As before, but chooses param names based on dashboard type.
+
+---
+
+### (Other methods are present but not shown in the excerpt—implied to be unchanged from v5.)
+
+---
+
+# Notable Additional Details
+
+- Both files implement logic to "archive_and_clean_tmp" before runs and "purge_old_archives" after.
+- **Splunk dashboard detection** is done by waiting for "splunk-dashboard-view" (Studio) or "div.dashboard-body" (Classic).
+- **Screenshot logic** includes timestamp overlay using PIL, with font fallback in v6.
+- **Retry logic** per dashboard is implemented in analysis functions.
+- **Scheduling** allows interval-based runs, with persisted config.
+
+---
+
+If you need a similar detailed breakdown for any specific file (like splunk_automation.py) or want a comparison with another file, let me know!
