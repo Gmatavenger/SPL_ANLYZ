@@ -1,550 +1,615 @@
-"""
-Enhanced Screenshot Management Module
-Provides comprehensive screenshot capture, processing, and storage capabilities.
-"""
-
 import os
 import io
-import hashlib
 from datetime import datetime
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, Any
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 from .config import Config
-from .logging_setup import logger
+from .logging_setup import logger, timing_context
 
 class ScreenshotProcessor:
-    """Enhanced screenshot processing with multiple format support and optimization."""
+    """Enhanced screenshot processing with advanced features."""
     
     def __init__(self):
-        self.supported_formats = ['PNG', 'JPEG', 'WEBP', 'BMP']
-        self.default_quality = 85
-        self.watermark_settings = {
-            'position': 'bottom_right',
-            'opacity': 0.7,
-            'font_size': 24
-        }
+        self.font_cache = {}
+        self._load_fonts()
+    
+    def _load_fonts(self):
+        """Load and cache fonts for annotations."""
+        font_paths = [
+            # Windows fonts
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/calibri.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            # macOS fonts
+            "/System/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            # Linux fonts
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+        ]
+        
+        font_sizes = [12, 16, 20, 24, 28, 32]
+        
+        for size in font_sizes:
+            font_found = False
+            for font_path in font_paths:
+                try:
+                    if os.path.exists(font_path):
+                        self.font_cache[size] = ImageFont.truetype(font_path, size)
+                        font_found = True
+                        break
+                except Exception:
+                    continue
+            
+            if not font_found:
+                try:
+                    # Fallback to default font
+                    self.font_cache[size] = ImageFont.load_default()
+                except Exception:
+                    self.font_cache[size] = None
     
     def save_screenshot_to_tmp(self, screenshot_bytes: bytes, filename: str, 
-                              dashboard_name: str = None, metadata: Dict = None) -> str:
-        """Enhanced screenshot saving with metadata and optimization."""
+                              dashboard_name: str = "", annotations: Dict[str, Any] = None) -> str:
+        """Save screenshot with enhanced annotations and metadata."""
+        with timing_context("save_screenshot", dashboard_name):
+            try:
+                # Create directory structure
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                day_tmp_dir = Config.get_temp_dir_for_date(today_str)
+                os.makedirs(day_tmp_dir, exist_ok=True)
+                
+                file_path = os.path.join(day_tmp_dir, filename)
+                
+                # Process image
+                image = self._process_screenshot(screenshot_bytes, dashboard_name, annotations)
+                
+                # Save with optimization
+                self._save_optimized_image(image, file_path)
+                
+                logger.info(f"Saved screenshot to {file_path}")
+                return file_path
+                
+            except Exception as e:
+                logger.error(f"Error saving screenshot: {e}")
+                raise
+    
+    def _process_screenshot(self, screenshot_bytes: bytes, dashboard_name: str, 
+                          annotations: Dict[str, Any] = None) -> Image.Image:
+        """Process screenshot with annotations and enhancements."""
+        # Load image
+        image = Image.open(io.BytesIO(screenshot_bytes))
+        
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Apply enhancements if requested
+        if annotations and annotations.get('enhance', False):
+            image = self._enhance_image(image, annotations.get('enhancement_settings', {}))
+        
+        # Add annotations
+        image = self._add_annotations(image, dashboard_name, annotations)
+        
+        return image
+    
+    def _enhance_image(self, image: Image.Image, settings: Dict) -> Image.Image:
+        """Apply image enhancements."""
         try:
-            # Create directory structure
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            day_tmp_dir = os.path.join(Config.TMP_DIR, today_str)
-            os.makedirs(day_tmp_dir, exist_ok=True)
+            # Brightness adjustment
+            brightness = settings.get('brightness', 1.0)
+            if brightness != 1.0:
+                enhancer = ImageEnhance.Brightness(image)
+                image = enhancer.enhance(brightness)
             
-            # Process the image
-            image = Image.open(io.BytesIO(screenshot_bytes))
+            # Contrast adjustment
+            contrast = settings.get('contrast', 1.0)
+            if contrast != 1.0:
+                enhancer = ImageEnhance.Contrast(image)
+                image = enhancer.enhance(contrast)
             
-            # Add timestamp watermark
-            image = self._add_timestamp_watermark(image, dashboard_name)
+            # Sharpness adjustment
+            sharpness = settings.get('sharpness', 1.0)
+            if sharpness != 1.0:
+                enhancer = ImageEnhance.Sharpness(image)
+                image = enhancer.enhance(sharpness)
             
-            # Add metadata overlay if provided
-            if metadata:
-                image = self._add_metadata_overlay(image, metadata)
+            # Blur filter
+            if settings.get('blur', False):
+                blur_radius = settings.get('blur_radius', 1)
+                image = image.filter(ImageFilter.GaussianBlur(radius=blur_radius))
             
-            # Optimize image
-            image = self._optimize_image(image)
-            
-            # Save the processed image
-            file_path = os.path.join(day_tmp_dir, filename)
-            image.save(file_path, format='PNG', optimize=True)
-            
-            # Save metadata file
-            self._save_metadata_file(file_path, dashboard_name, metadata)
-            
-            # Calculate and log file size
-            file_size = os.path.getsize(file_path)
-            logger.info(f"Saved screenshot to {file_path} ({self._format_file_size(file_size)})")
-            
-            return file_path
+            return image
             
         except Exception as e:
-            logger.error(f"Error saving screenshot: {e}")
-            raise
+            logger.warning(f"Error enhancing image: {e}")
+            return image
     
-    def _add_timestamp_watermark(self, image: Image.Image, dashboard_name: str = None) -> Image.Image:
-        """Add timestamp and dashboard name watermark to the image."""
+    def _add_annotations(self, image: Image.Image, dashboard_name: str, 
+                        annotations: Dict[str, Any] = None) -> Image.Image:
+        """Add annotations to the screenshot."""
         try:
-            # Create a copy to avoid modifying the original
-            img_copy = image.copy()
-            draw = ImageDraw.Draw(img_copy)
+            draw = ImageDraw.Draw(image)
             
-            # Get timezone-aware timestamp
+            # Basic timestamp annotation
             timestamp = datetime.now(Config.EST).strftime("%Y-%m-%d %H:%M:%S %Z")
             
-            # Try to load a better font
-            font = self._get_watermark_font()
+            # Prepare annotation settings
+            if not annotations:
+                annotations = {}
             
-            # Prepare watermark text
-            watermark_lines = [f"Captured: {timestamp}"]
-            if dashboard_name:
-                watermark_lines.append(f"Dashboard: {dashboard_name}")
+            font_size = annotations.get('font_size', 24)
+            text_color = annotations.get('text_color', 'white')
+            bg_color = annotations.get('bg_color', 'black')
+            position = annotations.get('position', 'top-left')
+            include_dashboard_name = annotations.get('include_dashboard_name', True)
             
-            # Calculate text positioning
-            img_width, img_height = img_copy.size
-            line_height = 30
-            total_height = len(watermark_lines) * line_height
+            # Get font
+            font = self.font_cache.get(font_size)
             
-            # Position at top-left with some padding
-            x, y = 15, 15
+            # Prepare text
+            lines = [f"Captured: {timestamp}"]
+            if include_dashboard_name and dashboard_name:
+                lines.append(f"Dashboard: {dashboard_name}")
             
-            # Add semi-transparent background for better readability
-            for i, line in enumerate(watermark_lines):
-                text_y = y + (i * line_height)
-                
-                # Get text bounding box
-                bbox = draw.textbbox((x, text_y), line, font=font)
-                
-                # Draw semi-transparent background
-                bg_padding = 5
-                draw.rectangle([
-                    bbox[0] - bg_padding, bbox[1] - bg_padding,
-                    bbox[2] + bg_padding, bbox[3] + bg_padding
-                ], fill=(0, 0, 0, 128))
-                
-                # Draw text
-                draw.text((x, text_y), line, fill="white", font=font)
+            # Add custom annotations
+            custom_annotations = annotations.get('custom_text', [])
+            if isinstance(custom_annotations, str):
+                custom_annotations = [custom_annotations]
+            lines.extend(custom_annotations)
             
-            return img_copy
+            # Calculate text dimensions
+            text_bbox = self._calculate_text_bbox(draw, lines, font)
+            
+            # Determine position
+            x, y = self._get_annotation_position(image, text_bbox, position)
+            
+            # Draw background rectangle
+            if bg_color and bg_color.lower() != 'transparent':
+                padding = 10
+                bg_bbox = (
+                    x - padding,
+                    y - padding,
+                    x + text_bbox[2] + padding,
+                    y + text_bbox[3] + padding
+                )
+                draw.rectangle(bg_bbox, fill=bg_color, outline=None)
+            
+            # Draw text lines
+            current_y = y
+            for line in lines:
+                draw.text((x, current_y), line, fill=text_color, font=font)
+                line_height = draw.textbbox((0, 0), line, font=font)[3]
+                current_y += line_height + 2
+            
+            # Add watermark if requested
+            if annotations.get('watermark'):
+                self._add_watermark(draw, image, annotations.get('watermark'))
+            
+            # Add border if requested
+            if annotations.get('border'):
+                self._add_border(draw, image, annotations.get('border'))
+            
+            return image
+            
+        except Exception as e:
+            logger.warning(f"Error adding annotations: {e}")
+            return image
+    
+    def _calculate_text_bbox(self, draw: ImageDraw.Draw, lines: list, font) -> Tuple[int, int, int, int]:
+        """Calculate bounding box for multiple lines of text."""
+        max_width = 0
+        total_height = 0
+        
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            width = bbox[2] - bbox[0]
+            height = bbox[3] - bbox[1]
+            
+            max_width = max(max_width, width)
+            total_height += height + 2  # Add line spacing
+        
+        return (0, 0, max_width, total_height)
+    
+    def _get_annotation_position(self, image: Image.Image, text_bbox: Tuple[int, int, int, int], 
+                               position: str) -> Tuple[int, int]:
+        """Calculate annotation position based on image size and preference."""
+        img_width, img_height = image.size
+        text_width, text_height = text_bbox[2], text_bbox[3]
+        
+        margin = 10
+        
+        position_map = {
+            'top-left': (margin, margin),
+            'top-right': (img_width - text_width - margin, margin),
+            'top-center': ((img_width - text_width) // 2, margin),
+            'bottom-left': (margin, img_height - text_height - margin),
+            'bottom-right': (img_width - text_width - margin, img_height - text_height - margin),
+            'bottom-center': ((img_width - text_width) // 2, img_height - text_height - margin),
+            'center': ((img_width - text_width) // 2, (img_height - text_height) // 2)
+        }
+        
+        return position_map.get(position, position_map['top-left'])
+    
+    def _add_watermark(self, draw: ImageDraw.Draw, image: Image.Image, watermark_config: Dict):
+        """Add watermark to the image."""
+        try:
+            text = watermark_config.get('text', 'Splunk Automator')
+            opacity = watermark_config.get('opacity', 0.3)
+            font_size = watermark_config.get('font_size', 48)
+            color = watermark_config.get('color', 'gray')
+            
+            # Create watermark overlay
+            watermark = Image.new('RGBA', image.size, (0, 0, 0, 0))
+            watermark_draw = ImageDraw.Draw(watermark)
+            
+            font = self.font_cache.get(font_size)
+            
+            # Position watermark in center
+            bbox = watermark_draw.textbbox((0, 0), text, font=font)
+            text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            x = (image.size[0] - text_width) // 2
+            y = (image.size[1] - text_height) // 2
+            
+            # Draw watermark text
+            watermark_draw.text((x, y), text, font=font, fill=(*self._parse_color(color), int(255 * opacity)))
+            
+            # Composite with original image
+            image.paste(watermark, (0, 0), watermark)
             
         except Exception as e:
             logger.warning(f"Error adding watermark: {e}")
-            return image
     
-    def _add_metadata_overlay(self, image: Image.Image, metadata: Dict) -> Image.Image:
-        """Add metadata information overlay to the image."""
+    def _add_border(self, draw: ImageDraw.Draw, image: Image.Image, border_config: Dict):
+        """Add border to the image."""
         try:
-            if not metadata:
-                return image
+            width = border_config.get('width', 2)
+            color = border_config.get('color', 'black')
+            style = border_config.get('style', 'solid')
             
-            img_copy = image.copy()
-            draw = ImageDraw.Draw(img_copy)
-            font = self._get_metadata_font()
+            img_width, img_height = image.size
             
-            # Prepare metadata text
-            meta_lines = []
-            if 'time_range' in metadata:
-                meta_lines.append(f"Time Range: {metadata['time_range']}")
-            if 'search_count' in metadata:
-                meta_lines.append(f"Searches: {metadata['search_count']}")
-            if 'panel_count' in metadata:
-                meta_lines.append(f"Panels: {metadata['panel_count']}")
-            
-            if not meta_lines:
-                return img_copy
-            
-            # Position at bottom-right
-            img_width, img_height = img_copy.size
-            line_height = 25
-            padding = 15
-            
-            for i, line in enumerate(reversed(meta_lines)):
-                text_y = img_height - padding - ((i + 1) * line_height)
+            if style == 'solid':
+                # Draw solid border
+                for i in range(width):
+                    draw.rectangle(
+                        [(i, i), (img_width - 1 - i, img_height - 1 - i)],
+                        outline=color,
+                        width=1
+                    )
+            elif style == 'dashed':
+                # Draw dashed border (simplified)
+                dash_length = 10
+                gap_length = 5
                 
-                # Get text dimensions
-                bbox = draw.textbbox((0, 0), line, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_x = img_width - text_width - padding
+                # Top and bottom borders
+                for y in [0, img_height - width]:
+                    x = 0
+                    while x < img_width:
+                        draw.rectangle(
+                            [(x, y), (min(x + dash_length, img_width), y + width)],
+                            fill=color
+                        )
+                        x += dash_length + gap_length
                 
-                # Draw semi-transparent background
-                bg_padding = 3
-                draw.rectangle([
-                    text_x - bg_padding, text_y - bg_padding,
-                    text_x + text_width + bg_padding, text_y + line_height - bg_padding
-                ], fill=(0, 0, 0, 100))
-                
-                # Draw text
-                draw.text((text_x, text_y), line, fill="lightgray", font=font)
-            
-            return img_copy
+                # Left and right borders
+                for x in [0, img_width - width]:
+                    y = 0
+                    while y < img_height:
+                        draw.rectangle(
+                            [(x, y), (x + width, min(y + dash_length, img_height))],
+                            fill=color
+                        )
+                        y += dash_length + gap_length
             
         except Exception as e:
-            logger.warning(f"Error adding metadata overlay: {e}")
-            return image
+            logger.warning(f"Error adding border: {e}")
     
-    def _get_watermark_font(self):
-        """Get the best available font for watermarks."""
-        font_size = self.watermark_settings['font_size']
+    def _parse_color(self, color_str: str) -> Tuple[int, int, int]:
+        """Parse color string to RGB tuple."""
+        color_map = {
+            'white': (255, 255, 255),
+            'black': (0, 0, 0),
+            'red': (255, 0, 0),
+            'green': (0, 255, 0),
+            'blue': (0, 0, 255),
+            'yellow': (255, 255, 0),
+            'cyan': (0, 255, 255),
+            'magenta': (255, 0, 255),
+            'gray': (128, 128, 128),
+            'grey': (128, 128, 128)
+        }
         
-        # Try different font paths
-        font_paths = [
-            "C:/Windows/Fonts/arial.ttf",  # Windows
-            "/System/Library/Fonts/Arial.ttf",  # macOS
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
-            "/usr/share/fonts/TTF/arial.ttf",  # Some Linux distributions
-        ]
+        if color_str.lower() in color_map:
+            return color_map[color_str.lower()]
         
-        for font_path in font_paths:
+        # Try to parse hex color
+        if color_str.startswith('#') and len(color_str) == 7:
             try:
-                if os.path.exists(font_path):
-                    return ImageFont.truetype(font_path, font_size)
-            except Exception:
-                continue
-        
-        # Fallback to default font
-        try:
-            return ImageFont.load_default()
-        except Exception:
-            return None
-    
-    def _get_metadata_font(self):
-        """Get font for metadata overlay."""
-        try:
-            font = self._get_watermark_font()
-            if font and hasattr(font, 'size'):
-                # Use smaller font for metadata
-                return font.font_variant(size=18)
-            return font
-        except Exception:
-            return self._get_watermark_font()
-    
-    def _optimize_image(self, image: Image.Image) -> Image.Image:
-        """Optimize image for storage and display."""
-        try:
-            # Convert to RGB if necessary (for JPEG compatibility)
-            if image.mode in ('RGBA', 'LA', 'P'):
-                # Create white background for transparency
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                if image.mode == 'P':
-                    image = image.convert('RGBA')
-                background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
-                image = background
-            
-            # Resize if image is too large
-            max_width, max_height = 1920, 1080
-            if image.width > max_width or image.height > max_height:
-                image.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-                logger.info(f"Resized image to {image.width}x{image.height}")
-            
-            return image
-            
-        except Exception as e:
-            logger.warning(f"Error optimizing image: {e}")
-            return image
-    
-    def _save_metadata_file(self, image_path: str, dashboard_name: str = None, metadata: Dict = None):
-        """Save metadata as a separate JSON file."""
-        try:
-            metadata_path = image_path.replace('.png', '.meta.json')
-            
-            meta_data = {
-                'timestamp': datetime.now().isoformat(),
-                'dashboard_name': dashboard_name,
-                'image_path': image_path,
-                'file_size': os.path.getsize(image_path),
-                'image_dimensions': None
-            }
-            
-            # Add image dimensions
-            try:
-                with Image.open(image_path) as img:
-                    meta_data['image_dimensions'] = {'width': img.width, 'height': img.height}
-            except Exception:
+                return tuple(int(color_str[i:i+2], 16) for i in (1, 3, 5))
+            except ValueError:
                 pass
+        
+        # Default to black
+        return (0, 0, 0)
+    
+    def _save_optimized_image(self, image: Image.Image, file_path: str):
+        """Save image with optimization."""
+        try:
+            # Determine format and optimization settings
+            format_type = 'PNG'
+            save_kwargs = {'format': format_type}
             
-            # Add custom metadata
-            if metadata:
-                meta_data.update(metadata)
+            # PNG optimization
+            if format_type == 'PNG':
+                save_kwargs.update({
+                    'optimize': True,
+                    'compress_level': 6  # Good balance of size and speed
+                })
             
-            import json
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(meta_data, f, indent=2)
+            # Save image
+            image.save(file_path, **save_kwargs)
+            
+            # Set file permissions
+            os.chmod(file_path, Config.SECURE_FILE_PERMISSIONS)
+            
+        except Exception as e:
+            logger.error(f"Error saving optimized image: {e}")
+            # Fallback to basic save
+            image.save(file_path)
+    
+    def create_thumbnail(self, image_path: str, thumbnail_path: str, size: Tuple[int, int] = (200, 150)) -> bool:
+        """Create a thumbnail from an existing image."""
+        try:
+            with Image.open(image_path) as image:
+                # Convert to RGB if necessary
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                # Create thumbnail maintaining aspect ratio
+                image.thumbnail(size, Image.Resampling.LANCZOS)
+                
+                # Save thumbnail
+                image.save(thumbnail_path, 'PNG', optimize=True)
+                
+                logger.debug(f"Created thumbnail: {thumbnail_path}")
+                return True
                 
         except Exception as e:
-            logger.warning(f"Error saving metadata file: {e}")
+            logger.error(f"Error creating thumbnail: {e}")
+            return False
     
-    def _format_file_size(self, size_bytes: int) -> str:
-        """Format file size in human-readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.1f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.1f} TB"
-    
-    def create_screenshot_comparison(self, screenshot_paths: List[str], output_path: str) -> bool:
-        """Create a comparison image from multiple screenshots."""
+    def create_contact_sheet(self, image_paths: list, output_path: str, 
+                           cols: int = 3, thumbnail_size: Tuple[int, int] = (200, 150)) -> bool:
+        """Create a contact sheet from multiple images."""
         try:
-            if not screenshot_paths:
+            if not image_paths:
+                return False
+            
+            rows = (len(image_paths) + cols - 1) // cols
+            
+            # Calculate contact sheet dimensions
+            margin = 10
+            sheet_width = cols * thumbnail_size[0] + (cols + 1) * margin
+            sheet_height = rows * thumbnail_size[1] + (rows + 1) * margin
+            
+            # Create contact sheet
+            contact_sheet = Image.new('RGB', (sheet_width, sheet_height), 'white')
+            
+            for idx, image_path in enumerate(image_paths):
+                try:
+                    with Image.open(image_path) as img:
+                        # Create thumbnail
+                        img.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
+                        
+                        # Calculate position
+                        col = idx % cols
+                        row = idx // cols
+                        
+                        x = margin + col * (thumbnail_size[0] + margin)
+                        y = margin + row * (thumbnail_size[1] + margin)
+                        
+                        # Paste thumbnail
+                        contact_sheet.paste(img, (x, y))
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing image {image_path} for contact sheet: {e}")
+                    continue
+            
+            # Save contact sheet
+            contact_sheet.save(output_path, 'PNG', optimize=True)
+            logger.info(f"Created contact sheet: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating contact sheet: {e}")
+            return False
+    
+    def add_comparison_annotations(self, image_paths: list, output_path: str, 
+                                 titles: list = None) -> bool:
+        """Create a side-by-side comparison of multiple images."""
+        try:
+            if len(image_paths) < 2:
                 return False
             
             images = []
-            for path in screenshot_paths:
-                if os.path.exists(path):
-                    img = Image.open(path)
+            max_height = 0
+            total_width = 0
+            
+            # Load and process images
+            for i, image_path in enumerate(image_paths):
+                try:
+                    img = Image.open(image_path)
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    
                     images.append(img)
+                    max_height = max(max_height, img.height)
+                    total_width += img.width
+                    
+                except Exception as e:
+                    logger.warning(f"Error loading image {image_path}: {e}")
+                    continue
             
             if not images:
                 return False
             
-            # Calculate layout
-            cols = min(2, len(images))
-            rows = (len(images) + cols - 1) // cols
-            
-            # Get maximum dimensions
-            max_width = max(img.width for img in images)
-            max_height = max(img.height for img in images)
-            
             # Create comparison image
-            comparison_width = max_width * cols + 20 * (cols - 1)
-            comparison_height = max_height * rows + 20 * (rows - 1)
+            margin = 20
+            title_height = 50 if titles else 0
+            comparison_width = total_width + margin * (len(images) + 1)
+            comparison_height = max_height + margin * 2 + title_height
             
             comparison = Image.new('RGB', (comparison_width, comparison_height), 'white')
+            draw = ImageDraw.Draw(comparison)
             
             # Paste images
+            current_x = margin
             for i, img in enumerate(images):
-                row = i // cols
-                col = i % cols
-                x = col * (max_width + 20)
-                y = row * (max_height + 20)
-                comparison.paste(img, (x, y))
+                y = margin + title_height
+                comparison.paste(img, (current_x, y))
+                
+                # Add title if provided
+                if titles and i < len(titles):
+                    font = self.font_cache.get(16)
+                    title_y = margin
+                    draw.text((current_x, title_y), titles[i], fill='black', font=font)
+                
+                current_x += img.width + margin
             
-            comparison.save(output_path, format='PNG', optimize=True)
+            # Save comparison
+            comparison.save(output_path, 'PNG', optimize=True)
             logger.info(f"Created comparison image: {output_path}")
             return True
             
         except Exception as e:
-            logger.error(f"Error creating screenshot comparison: {e}")
+            logger.error(f"Error creating comparison image: {e}")
             return False
+        finally:
+            # Clean up loaded images
+            for img in images:
+                try:
+                    img.close()
+                except:
+                    pass
+
+class ScreenshotMetadata:
+    """Manage screenshot metadata and EXIF information."""
     
-    def apply_image_filters(self, image_path: str, filters: List[str]) -> str:
-        """Apply image filters and save the result."""
+    @staticmethod
+    def extract_metadata(image_path: str) -> Dict[str, Any]:
+        """Extract metadata from screenshot."""
         try:
-            with Image.open(image_path) as img:
-                processed_img = img.copy()
+            with Image.open(image_path) as image:
+                metadata = {
+                    'filename': os.path.basename(image_path),
+                    'size': image.size,
+                    'mode': image.mode,
+                    'format': image.format,
+                    'file_size': os.path.getsize(image_path),
+                    'created': datetime.fromtimestamp(os.path.getctime(image_path)).isoformat(),
+                    'modified': datetime.fromtimestamp(os.path.getmtime(image_path)).isoformat()
+                }
                 
-                for filter_name in filters:
-                    if filter_name == 'sharpen':
-                        processed_img = processed_img.filter(ImageFilter.SHARPEN)
-                    elif filter_name == 'blur':
-                        processed_img = processed_img.filter(ImageFilter.BLUR)
-                    elif filter_name == 'enhance_contrast':
-                        enhancer = ImageEnhance.Contrast(processed_img)
-                        processed_img = enhancer.enhance(1.2)
-                    elif filter_name == 'enhance_brightness':
-                        enhancer = ImageEnhance.Brightness(processed_img)
-                        processed_img = enhancer.enhance(1.1)
-                    elif filter_name == 'grayscale':
-                        processed_img = processed_img.convert('L').convert('RGB')
+                # Extract EXIF data if available
+                if hasattr(image, '_getexif') and image._getexif():
+                    exif_data = image._getexif()
+                    metadata['exif'] = exif_data
                 
-                # Save processed image
-                base_name, ext = os.path.splitext(image_path)
-                processed_path = f"{base_name}_processed{ext}"
-                processed_img.save(processed_path, format='PNG', optimize=True)
-                
-                return processed_path
+                return metadata
                 
         except Exception as e:
-            logger.error(f"Error applying image filters: {e}")
-            return image_path
+            logger.warning(f"Error extracting metadata from {image_path}: {e}")
+            return {}
     
-    def generate_thumbnail(self, image_path: str, thumbnail_size: Tuple[int, int] = (200, 150)) -> str:
-        """Generate a thumbnail for the screenshot."""
+    @staticmethod
+    def add_custom_metadata(image_path: str, metadata: Dict[str, Any]) -> bool:
+        """Add custom metadata to image file."""
         try:
-            with Image.open(image_path) as img:
-                # Create thumbnail
-                img.thumbnail(thumbnail_size, Image.Resampling.LANCZOS)
-                
-                # Save thumbnail
-                base_name, ext = os.path.splitext(image_path)
-                thumbnail_path = f"{base_name}_thumb{ext}"
-                img.save(thumbnail_path, format='PNG', optimize=True)
-                
-                logger.debug(f"Generated thumbnail: {thumbnail_path}")
-                return thumbnail_path
-                
+            # For PNG files, we can use text chunks
+            # This is a simplified implementation
+            logger.debug(f"Custom metadata would be added to {image_path}: {metadata}")
+            return True
+            
         except Exception as e:
-            logger.warning(f"Error generating thumbnail: {e}")
-            return image_path
+            logger.error(f"Error adding custom metadata: {e}")
+            return False
 
 class ScreenshotArchiver:
-    """Handles screenshot archiving and cleanup operations."""
+    """Manage screenshot archiving and compression."""
     
     def __init__(self):
-        self.archive_formats = ['zip', 'tar.gz']
-        self.default_format = 'zip'
+        self.processor = ScreenshotProcessor()
     
-    def archive_screenshots(self, source_dir: str, archive_path: str, 
-                          compression_level: int = 6) -> bool:
-        """Archive screenshots with compression."""
+    def archive_screenshots_by_date(self, date_str: str, compression_level: int = 6) -> Optional[str]:
+        """Archive all screenshots for a specific date."""
         try:
-            import shutil
+            date_dir = Config.get_temp_dir_for_date(date_str)
+            if not os.path.exists(date_dir) or not os.listdir(date_dir):
+                logger.info(f"No screenshots found for date {date_str}")
+                return None
             
-            if not os.path.exists(source_dir):
-                logger.warning(f"Source directory not found: {source_dir}")
-                return False
+            # Create archive directory
+            archive_dir = Config.get_archive_dir_for_date(date_str)
+            os.makedirs(os.path.dirname(archive_dir), exist_ok=True)
             
-            # Count files to archive
-            file_count = sum(1 for root, dirs, files in os.walk(source_dir) for file in files)
+            archive_path = f"{archive_dir}.zip"
             
-            if file_count == 0:
-                logger.info("No files to archive")
-                return True
-            
-            # Create archive
-            archive_base = os.path.splitext(archive_path)[0]
-            shutil.make_archive(archive_base, 'zip', source_dir)
-            
-            # Verify archive was created
-            final_archive_path = f"{archive_base}.zip"
-            if os.path.exists(final_archive_path):
-                archive_size = os.path.getsize(final_archive_path)
-                logger.info(f"Archived {file_count} files to {final_archive_path} "
-                           f"({self._format_file_size(archive_size)})")
-                return True
-            else:
-                logger.error("Archive was not created")
-                return False
+            import zipfile
+            with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED, 
+                               compresslevel=compression_level) as zipf:
                 
+                for root, dirs, files in os.walk(date_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arc_name = os.path.relpath(file_path, date_dir)
+                        zipf.write(file_path, arc_name)
+            
+            logger.info(f"Archived screenshots to {archive_path}")
+            return archive_path
+            
         except Exception as e:
-            logger.error(f"Error archiving screenshots: {e}")
+            logger.error(f"Error archiving screenshots for {date_str}: {e}")
+            return None
+    
+    def create_summary_report(self, date_str: str, output_path: str) -> bool:
+        """Create a summary report with all screenshots for a date."""
+        try:
+            date_dir = Config.get_temp_dir_for_date(date_str)
+            if not os.path.exists(date_dir):
+                return False
+            
+            # Find all screenshot files
+            screenshot_files = []
+            for file in os.listdir(date_dir):
+                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    screenshot_files.append(os.path.join(date_dir, file))
+            
+            if not screenshot_files:
+                return False
+            
+            # Create contact sheet
+            return self.processor.create_contact_sheet(
+                screenshot_files, output_path, cols=2, thumbnail_size=(400, 300)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating summary report: {e}")
             return False
-    
-    def cleanup_old_screenshots(self, days_to_keep: int = 7) -> Dict[str, int]:
-        """Clean up old screenshots and return statistics."""
-        stats = {'files_deleted': 0, 'bytes_freed': 0, 'errors': 0}
-        
-        try:
-            cutoff_date = datetime.now() - timedelta(days=days_to_keep)
-            
-            for root, dirs, files in os.walk(Config.TMP_DIR):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    
-                    try:
-                        # Check file age
-                        file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-                        
-                        if file_mtime < cutoff_date:
-                            file_size = os.path.getsize(file_path)
-                            os.remove(file_path)
-                            stats['files_deleted'] += 1
-                            stats['bytes_freed'] += file_size
-                            
-                    except Exception as e:
-                        logger.warning(f"Error processing file {file_path}: {e}")
-                        stats['errors'] += 1
-            
-            # Remove empty directories
-            self._remove_empty_dirs(Config.TMP_DIR)
-            
-            logger.info(f"Cleanup completed: {stats['files_deleted']} files deleted, "
-                       f"{self._format_file_size(stats['bytes_freed'])} freed")
-            
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-            stats['errors'] += 1
-        
-        return stats
-    
-    def _remove_empty_dirs(self, path: str):
-        """Remove empty directories recursively."""
-        try:
-            for root, dirs, files in os.walk(path, topdown=False):
-                for dir_name in dirs:
-                    dir_path = os.path.join(root, dir_name)
-                    try:
-                        if not os.listdir(dir_path):  # Directory is empty
-                            os.rmdir(dir_path)
-                            logger.debug(f"Removed empty directory: {dir_path}")
-                    except Exception:
-                        pass  # Directory not empty or permission error
-        except Exception as e:
-            logger.warning(f"Error removing empty directories: {e}")
-    
-    def _format_file_size(self, size_bytes: int) -> str:
-        """Format file size in human-readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.1f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.1f} TB"
 
-# Global instances
-screenshot_processor = ScreenshotProcessor()
-screenshot_archiver = ScreenshotArchiver()
-
-# Legacy function for backward compatibility
+# Backward compatibility functions
 def save_screenshot_to_tmp(screenshot_bytes: bytes, filename: str) -> str:
-    """Legacy function - use ScreenshotProcessor.save_screenshot_to_tmp instead."""
-    return screenshot_processor.save_screenshot_to_tmp(screenshot_bytes, filename)
+    """Backward compatible function for saving screenshots."""
+    processor = ScreenshotProcessor()
+    return processor.save_screenshot_to_tmp(screenshot_bytes, filename)
 
-# Enhanced utility functions
-def create_screenshot_with_metadata(screenshot_bytes: bytes, filename: str, 
-                                  dashboard_name: str, time_range: str = None,
-                                  panel_count: int = None) -> str:
-    """Create screenshot with enhanced metadata."""
-    metadata = {}
-    if time_range:
-        metadata['time_range'] = time_range
-    if panel_count:
-        metadata['panel_count'] = panel_count
-    
-    return screenshot_processor.save_screenshot_to_tmp(
-        screenshot_bytes, filename, dashboard_name, metadata
-    )
+def save_screenshot_with_annotations(screenshot_bytes: bytes, filename: str, 
+                                   dashboard_name: str, custom_annotations: Dict = None) -> str:
+    """Save screenshot with custom annotations."""
+    processor = ScreenshotProcessor()
+    return processor.save_screenshot_to_tmp(screenshot_bytes, filename, dashboard_name, custom_annotations)
 
-def batch_process_screenshots(screenshot_dir: str, operations: List[str]) -> List[str]:
-    """Batch process multiple screenshots with specified operations."""
-    processed_files = []
-    
-    try:
-        for filename in os.listdir(screenshot_dir):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                file_path = os.path.join(screenshot_dir, filename)
-                
-                # Apply operations
-                processed_path = file_path
-                if 'thumbnail' in operations:
-                    processed_path = screenshot_processor.generate_thumbnail(processed_path)
-                
-                if any(op in operations for op in ['sharpen', 'blur', 'enhance_contrast']):
-                    filters = [op for op in operations if op in ['sharpen', 'blur', 'enhance_contrast']]
-                    processed_path = screenshot_processor.apply_image_filters(processed_path, filters)
-                
-                processed_files.append(processed_path)
-                
-    except Exception as e:
-        logger.error(f"Error in batch processing: {e}")
-    
-    return processed_files
-
-def get_screenshot_statistics(directory: str) -> Dict:
-    """Get statistics about screenshots in a directory."""
-    stats = {
-        'total_files': 0,
-        'total_size': 0,
-        'by_extension': {},
-        'by_date': {},
-        'average_size': 0
-    }
-    
-    try:
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp')):
-                    file_path = os.path.join(root, file)
-                    file_size = os.path.getsize(file_path)
-                    file_ext = os.path.splitext(file)[1].lower()
-                    
-                    # Update statistics
-                    stats['total_files'] += 1
-                    stats['total_size'] += file_size
-                    stats['by_extension'][file_ext] = stats['by_extension'].get(file_ext, 0) + 1
-                    
-                    # Date statistics
-                    try:
-                        file_date = datetime.fromtimestamp(os.path.getmtime(file_path)).date()
-                        date_str = file_date.strftime('%Y-%m-%d')
-                        stats['by_date'][date_str] = stats['by_date'].get(date_str, 0) + 1
-                    except Exception:
-                        pass
-        
-        # Calculate average size
-        if stats['total_files'] > 0:
-            stats['average_size'] = stats['total_size'] / stats['total_files']
-            
-    except Exception as e:
-        logger.error(f"Error calculating screenshot statistics: {e}")
-    
-    return stats
+def create_dashboard_comparison(image_paths: list, output_path: str, 
+                              dashboard_names: list = None) -> bool:
+    """Create a comparison image of multiple dashboard screenshots."""
+    processor = ScreenshotProcessor()
+    return processor.add_comparison_annotations(image_paths, output_path, dashboard_names)
