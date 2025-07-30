@@ -1,685 +1,703 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, Toplevel
-from datetime import datetime, time as dt_time, timedelta
-import pytz
-import json
-import os
+from tkinter import ttk, messagebox
+from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple, List
+import re
+from .config import Config
+from .logging_setup import logger
 
-try:
-    from tkcalendar import DateEntry
-except ImportError:
-    raise ImportError("tkcalendar is required for TimeRangeDialog.")
-
-class TimeRangeDialog(Toplevel):
-    """Enhanced time range selection dialog with save/load presets functionality."""
+class TimeRangeDialog:
+    """Enhanced time range selection dialog with presets and validation."""
     
-    def __init__(self, parent, timezone="America/New_York", title="Select Time Range"):
-        super().__init__(parent)
-        self.title(title)
-        self.geometry("750x550")
-        self.result = {}
-        self.est = pytz.timezone(timezone)
-        self.transient(parent)
-        self.grab_set()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+    def __init__(self, parent):
+        self.parent = parent
+        self.result = None
+        self.dialog = None
+        self._create_dialog()
+    
+    def _create_dialog(self):
+        """Create the time range selection dialog."""
+        self.dialog = tk.Toplevel(self.parent)
+        self.dialog.title("Select Time Range")
+        self.dialog.geometry("450x500")
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+        self.dialog.resizable(False, False)
         
         # Center the dialog
-        self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
-        y = (self.winfo_screenheight() // 2) - (self.winfo_height() // 2)
-        self.geometry(f"+{x}+{y}")
+        self._center_dialog()
         
-        # Custom presets file
-        self.custom_presets_file = "custom_time_presets.json"
-        self.custom_presets = self._load_custom_presets()
+        # Set up the UI
+        self._setup_ui()
         
-        self._init_ui()
-        self.focus_set()
-
-    def _init_ui(self):
-        """Initialize the user interface."""
-        main_frame = ttk.Frame(self, padding="10")
+        # Set default values
+        self._set_defaults()
+        
+        # Bind events
+        self._bind_events()
+    
+    def _center_dialog(self):
+        """Center the dialog on the parent window."""
+        self.dialog.update_idletasks()
+        x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
+        y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
+        self.dialog.geometry(f"+{x}+{y}")
+    
+    def _setup_ui(self):
+        """Set up the dialog UI components."""
+        main_frame = ttk.Frame(self.dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Create left panel for options
-        left_frame = ttk.Frame(main_frame, width=150)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        left_frame.pack_propagate(False)
-
-        # Time range options
-        options = ["Presets", "Relative", "Date Range", "Date & Time Range", "Advanced", "Custom Presets"]
-        self.option_var = tk.StringVar(value=options[0])
-
-        ttk.Label(left_frame, text="Time Range Type:", font=('TkDefaultFont', 9, 'bold')).pack(anchor="w", pady=(0, 5))
         
-        for option in options:
-            rb = ttk.Radiobutton(left_frame, text=option, variable=self.option_var, 
-                               value=option, command=self.show_selected_frame)
-            rb.pack(anchor="w", pady=2)
-
-        # Add separator
-        ttk.Separator(left_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        # Create notebook for tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
         
-        # Quick time buttons
-        ttk.Label(left_frame, text="Quick Select:", font=('TkDefaultFont', 9, 'bold')).pack(anchor="w")
+        # Quick presets tab
+        self._create_presets_tab(notebook)
         
-        quick_times = [
-            ("Last Hour", "-1h@h", "now"),
-            ("Today", "@d", "now"),
-            ("Yesterday", "-1d@d", "@d"),
-            ("This Week", "@w", "now"),
-            ("Last Week", "-1w@w", "@w")
+        # Custom range tab
+        self._create_custom_tab(notebook)
+        
+        # Advanced tab
+        self._create_advanced_tab(notebook)
+        
+        # Buttons frame
+        self._create_buttons_frame(main_frame)
+        
+        # Status frame
+        self._create_status_frame(main_frame)
+    
+    def _create_presets_tab(self, notebook):
+        """Create the quick presets tab."""
+        presets_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(presets_frame, text="Quick Presets")
+        
+        ttk.Label(presets_frame, text="Select a predefined time range:", 
+                 font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
+        
+        # Preset options
+        self.preset_var = tk.StringVar(value="Last 24 hours")
+        
+        preset_options = [
+            ("Last 15 minutes", "-15m@m", "now"),
+            ("Last 30 minutes", "-30m@m", "now"),
+            ("Last 1 hour", "-1h@h", "now"),
+            ("Last 4 hours", "-4h@h", "now"),
+            ("Last 24 hours", "-24h@h", "now"),
+            ("Last 2 days", "-2d@d", "now"),
+            ("Last 7 days", "-7d@d", "now"),
+            ("Last 30 days", "-30d@d", "now"),
+            ("This week", "@w0", "now"),
+            ("Last week", "-1w@w0", "-0w@w0"),
+            ("This month", "@mon", "now"),
+            ("Last month", "-1mon@mon", "-0mon@mon"),
+            ("This year", "@y", "now"),
+            ("Yesterday", "-1d@d", "-0d@d"),
+            ("Today", "@d", "now")
         ]
         
-        for label, start, end in quick_times:
-            btn = ttk.Button(left_frame, text=label, width=12,
-                           command=lambda s=start, e=end: self._quick_select(s, e))
-            btn.pack(pady=1, fill=tk.X)
-
-        # Right panel for content
-        self.content_frame = ttk.Frame(main_frame)
-        self.content_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-        # Create frames for each option
-        self.frames = {}
-        for option in options:
-            frame = ttk.Frame(self.content_frame)
-            self.frames[option] = frame
-            
-        # Build each frame
-        self._build_presets_frame()
-        self._build_relative_frame()
-        self._build_date_range_frame()
-        self._build_datetime_range_frame()
-        self._build_advanced_frame()
-        self._build_custom_presets_frame()
-
-        # Button frame
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        self.preset_data = {}
         
-        # Left side buttons
-        ttk.Button(btn_frame, text="Reset", command=self._reset_form).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="Preview", command=self._preview_time_range).pack(side=tk.LEFT, padx=(10, 0))
+        for display_name, earliest, latest in preset_options:
+            rb = ttk.Radiobutton(presets_frame, text=display_name, 
+                               variable=self.preset_var, value=display_name)
+            rb.pack(anchor="w", pady=2)
+            self.preset_data[display_name] = {"start": earliest, "end": latest}
         
-        # Right side buttons
-        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(btn_frame, text="Apply", command=self.on_apply).pack(side=tk.RIGHT, padx=(0, 10))
-
-        # Show initial frame
-        self.show_selected_frame()
-
-    def _build_presets_frame(self):
-        """Build the presets selection frame."""
-        frame = self.frames["Presets"]
+        # Description frame
+        desc_frame = ttk.LabelFrame(presets_frame, text="Description", padding="10")
+        desc_frame.pack(fill=tk.X, pady=(20, 0))
         
-        # Standard Splunk time ranges
-        self.preset_splunk_ranges = {
-            "Last 15 minutes": ("-15m@m", "now"),
-            "Last 30 minutes": ("-30m@m", "now"), 
-            "Last 1 hour": ("-1h@h", "now"),
-            "Last 4 hours": ("-4h@h", "now"),
-            "Last 24 hours": ("-24h@h", "now"),
-            "Last 7 days": ("-7d@d", "now"),
-            "Last 30 days": ("-30d@d", "now"),
-            "Today": ("@d", "now"),
-            "Yesterday": ("-1d@d", "@d"),
-            "This week": ("@w", "now"),
-            "Previous week": ("-1w@w", "@w"),
-            "This month": ("@mon", "now"),
-            "Previous month": ("-1mon@mon", "@mon"),
-            "This year": ("@y", "now"),
-            "Previous year": ("-1y@y", "@y"),
-            "Week to date": ("@w", "now"),
-            "Month to date": ("@mon", "now"),
-            "Year to date": ("@y", "now"),
-            "All time": ("0", "now"),
-        }
+        self.preset_description = tk.Text(desc_frame, height=3, wrap=tk.WORD, 
+                                        state=tk.DISABLED, bg=presets_frame.cget('bg'))
+        self.preset_description.pack(fill=tk.X)
         
-        # Search frame
-        search_frame = ttk.Frame(frame)
-        search_frame.pack(fill=tk.X, pady=(0, 10))
+        # Bind preset selection change
+        self.preset_var.trace('w', self._on_preset_change)
+    
+    def _create_custom_tab(self, notebook):
+        """Create the custom time range tab."""
+        custom_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(custom_frame, text="Custom Range")
         
-        ttk.Label(search_frame, text="Search presets:").pack(side=tk.LEFT)
-        self.preset_search_var = tk.StringVar()
-        self.preset_search_var.trace('w', self._filter_presets)
-        search_entry = ttk.Entry(search_frame, textvariable=self.preset_search_var, width=20)
-        search_entry.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+        # Custom range type selection
+        ttk.Label(custom_frame, text="Custom Range Type:", 
+                 font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
         
-        # Scrollable preset list
-        canvas = tk.Canvas(frame, height=300)
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-        self.scrollable_frame = ttk.Frame(canvas)
+        self.custom_type_var = tk.StringVar(value="relative")
         
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        type_frame = ttk.Frame(custom_frame)
+        type_frame.pack(fill=tk.X, pady=(0, 20))
         
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        ttk.Radiobutton(type_frame, text="Relative Time", 
+                       variable=self.custom_type_var, value="relative").pack(anchor="w")
+        ttk.Radiobutton(type_frame, text="Absolute Time", 
+                       variable=self.custom_type_var, value="absolute").pack(anchor="w")
         
-        # Populate preset buttons
-        self.preset_buttons = []
-        self._populate_preset_buttons()
+        # Relative time frame
+        self.relative_frame = ttk.LabelFrame(custom_frame, text="Relative Time", padding="10")
+        self.relative_frame.pack(fill=tk.X, pady=(0, 10))
         
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-    def _populate_preset_buttons(self, filter_text=""):
-        """Populate preset buttons with optional filtering."""
-        # Clear existing buttons
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-        self.preset_buttons.clear()
-        
-        # Filter presets
-        filtered_presets = {}
-        for name, value in self.preset_splunk_ranges.items():
-            if filter_text.lower() in name.lower():
-                filtered_presets[name] = value
-        
-        # Create buttons
-        for i, (preset_name, preset_value) in enumerate(filtered_presets.items()):
-            btn = ttk.Button(
-                self.scrollable_frame,
-                text=preset_name,
-                width=25,
-                command=lambda p=preset_name: self.select_preset(p)
-            )
-            btn.pack(pady=2, padx=10, fill=tk.X)
-            self.preset_buttons.append(btn)
-
-    def _filter_presets(self, *args):
-        """Filter presets based on search text."""
-        filter_text = self.preset_search_var.get()
-        self._populate_preset_buttons(filter_text)
-
-    def _build_relative_frame(self):
-        """Build the relative time selection frame."""
-        frame = self.frames["Relative"]
-        
-        # Title
-        ttk.Label(frame, text="Relative Time Range", font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
-        
-        # Amount and unit selection
-        input_frame = ttk.Frame(frame)
-        input_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(input_frame, text="Go back:").pack(side=tk.LEFT)
-        
-        self.relative_amount = ttk.Entry(input_frame, width=8)
-        self.relative_amount.pack(side=tk.LEFT, padx=(10, 5))
-        self.relative_amount.insert(0, "1")
-        
-        units = ["minutes", "hours", "days", "weeks", "months", "years"]
-        self.relative_unit = ttk.Combobox(input_frame, values=units, state="readonly", width=10)
-        self.relative_unit.current(1)  # Default to hours
-        self.relative_unit.pack(side=tk.LEFT, padx=(0, 5))
-        
-        ttk.Label(input_frame, text="from now").pack(side=tk.LEFT, padx=(5, 0))
-        
-        # Examples
-        examples_frame = ttk.LabelFrame(frame, text="Examples", padding=10)
-        examples_frame.pack(fill=tk.X, pady=(20, 0))
-        
-        example_text = """• 1 hour = Last 1 hour from now
-• 24 hours = Last 24 hours from now  
-• 7 days = Last 7 days from now
-• 1 month = Last 1 month from now"""
-        
-        ttk.Label(examples_frame, text=example_text, justify=tk.LEFT).pack(anchor="w")
-
-    def _build_date_range_frame(self):
-        """Build the date range selection frame."""
-        frame = self.frames["Date Range"]
-        
-        ttk.Label(frame, text="Date Range Selection", font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
-        
-        # Date selection
-        date_frame = ttk.Frame(frame)
-        date_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(date_frame, text="From:").pack(side=tk.LEFT)
-        self.start_date = DateEntry(date_frame, width=12)
-        self.start_date.pack(side=tk.LEFT, padx=(10, 20))
-        
-        ttk.Label(date_frame, text="To:").pack(side=tk.LEFT)
-        self.end_date = DateEntry(date_frame, width=12)
-        self.end_date.pack(side=tk.LEFT, padx=(10, 0))
-        
-        # Info
-        info_frame = ttk.LabelFrame(frame, text="Information", padding=10)
-        info_frame.pack(fill=tk.X, pady=(20, 0))
-        
-        info_text = """Time will be set automatically:
-• Start date: 00:00:00 (beginning of day)
-• End date: 23:59:59 (end of day)
-
-This covers complete days in the selected range."""
-        
-        ttk.Label(info_frame, text=info_text, justify=tk.LEFT).pack(anchor="w")
-
-    def _build_datetime_range_frame(self):
-        """Build the date and time range selection frame."""
-        frame = self.frames["Date & Time Range"]
-        
-        ttk.Label(frame, text="Precise Date & Time Range", font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
-        
-        # Start datetime
-        start_frame = ttk.LabelFrame(frame, text="Start Date & Time", padding=10)
+        # Start time
+        start_frame = ttk.Frame(self.relative_frame)
         start_frame.pack(fill=tk.X, pady=(0, 10))
         
-        start_controls = ttk.Frame(start_frame)
-        start_controls.pack(fill=tk.X)
+        ttk.Label(start_frame, text="Start time:").pack(side=tk.LEFT)
+        self.relative_start_var = tk.StringVar(value="-24h")
+        ttk.Entry(start_frame, textvariable=self.relative_start_var, width=15).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(start_frame, text="(e.g., -24h, -7d, -1w)").pack(side=tk.LEFT)
         
-        ttk.Label(start_controls, text="Date:").pack(side=tk.LEFT)
-        self.dt_start_date = DateEntry(start_controls, width=12)
-        self.dt_start_date.pack(side=tk.LEFT, padx=(10, 20))
+        # End time
+        end_frame = ttk.Frame(self.relative_frame)
+        end_frame.pack(fill=tk.X)
         
-        ttk.Label(start_controls, text="Time:").pack(side=tk.LEFT)
-        self.dt_start_time = ttk.Entry(start_controls, width=12)
-        self.dt_start_time.insert(0, "00:00:00")
-        self.dt_start_time.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(end_frame, text="End time:").pack(side=tk.LEFT)
+        self.relative_end_var = tk.StringVar(value="now")
+        ttk.Entry(end_frame, textvariable=self.relative_end_var, width=15).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(end_frame, text="(e.g., now, -1h, -0d@d)").pack(side=tk.LEFT)
+        
+        # Absolute time frame
+        self.absolute_frame = ttk.LabelFrame(custom_frame, text="Absolute Time", padding="10")
+        self.absolute_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Start datetime
+        start_abs_frame = ttk.Frame(self.absolute_frame)
+        start_abs_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(start_abs_frame, text="Start date/time:").pack(anchor="w")
+        start_dt_frame = ttk.Frame(start_abs_frame)
+        start_dt_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.start_date_var = tk.StringVar()
+        self.start_time_var = tk.StringVar(value="00:00:00")
+        
+        ttk.Entry(start_dt_frame, textvariable=self.start_date_var, width=12).pack(side=tk.LEFT)
+        ttk.Label(start_dt_frame, text="Date (YYYY-MM-DD)").pack(side=tk.LEFT, padx=(5, 20))
+        ttk.Entry(start_dt_frame, textvariable=self.start_time_var, width=10).pack(side=tk.LEFT)
+        ttk.Label(start_dt_frame, text="Time (HH:MM:SS)").pack(side=tk.LEFT, padx=(5, 0))
         
         # End datetime
-        end_frame = ttk.LabelFrame(frame, text="End Date & Time", padding=10)
-        end_frame.pack(fill=tk.X, pady=(0, 10))
+        end_abs_frame = ttk.Frame(self.absolute_frame)
+        end_abs_frame.pack(fill=tk.X)
         
-        end_controls = ttk.Frame(end_frame)
-        end_controls.pack(fill=tk.X)
+        ttk.Label(end_abs_frame, text="End date/time:").pack(anchor="w")
+        end_dt_frame = ttk.Frame(end_abs_frame)
+        end_dt_frame.pack(fill=tk.X, pady=(5, 0))
         
-        ttk.Label(end_controls, text="Date:").pack(side=tk.LEFT)
-        self.dt_end_date = DateEntry(end_controls, width=12)
-        self.dt_end_date.pack(side=tk.LEFT, padx=(10, 20))
+        self.end_date_var = tk.StringVar()
+        self.end_time_var = tk.StringVar(value="23:59:59")
         
-        ttk.Label(end_controls, text="Time:").pack(side=tk.LEFT)
-        self.dt_end_time = ttk.Entry(end_controls, width=12)
-        self.dt_end_time.insert(0, "23:59:59")
-        self.dt_end_time.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Entry(end_dt_frame, textvariable=self.end_date_var, width=12).pack(side=tk.LEFT)
+        ttk.Label(end_dt_frame, text="Date (YYYY-MM-DD)").pack(side=tk.LEFT, padx=(5, 20))
+        ttk.Entry(end_dt_frame, textvariable=self.end_time_var, width=10).pack(side=tk.LEFT)
+        ttk.Label(end_dt_frame, text="Time (HH:MM:SS)").pack(side=tk.LEFT, padx=(5, 0))
         
-        # Quick time buttons
-        quick_frame = ttk.Frame(frame)
-        quick_frame.pack(fill=tk.X, pady=(10, 0))
+        # Bind custom type change
+        self.custom_type_var.trace('w', self._on_custom_type_change)
+    
+    def _create_advanced_tab(self, notebook):
+        """Create the advanced options tab."""
+        advanced_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(advanced_frame, text="Advanced")
         
-        ttk.Label(quick_frame, text="Quick times:").pack(side=tk.LEFT)
+        # Timezone selection
+        tz_frame = ttk.LabelFrame(advanced_frame, text="Timezone", padding="10")
+        tz_frame.pack(fill=tk.X, pady=(0, 10))
         
-        time_buttons = [
-            ("00:00:00", "00:00:00"),
-            ("09:00:00", "09:00:00"),
-            ("12:00:00", "12:00:00"),
-            ("17:00:00", "17:00:00"),
-            ("23:59:59", "23:59:59")
+        ttk.Label(tz_frame, text="Timezone:").pack(anchor="w")
+        self.timezone_var = tk.StringVar(value="EST")
+        
+        timezone_combo = ttk.Combobox(tz_frame, textvariable=self.timezone_var,
+                                    values=["UTC", "EST", "PST", "CST", "MST"], 
+                                    state="readonly", width=10)
+        timezone_combo.pack(anchor="w", pady=(5, 0))
+        
+        # Snap to options
+        snap_frame = ttk.LabelFrame(advanced_frame, text="Snap To", padding="10")
+        snap_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.snap_to_var = tk.StringVar(value="none")
+        
+        snap_options = [
+            ("No snapping", "none"),
+            ("Snap to minute", "@m"),
+            ("Snap to hour", "@h"),
+            ("Snap to day", "@d"),
+            ("Snap to week", "@w"),
+            ("Snap to month", "@mon")
         ]
         
-        for label, time_val in time_buttons:
-            btn = ttk.Button(quick_frame, text=label, width=8,
-                           command=lambda t=time_val: self._set_time_field(t))
-            btn.pack(side=tk.LEFT, padx=2)
-
-    def _build_advanced_frame(self):
-        """Build the advanced (epoch) time selection frame."""
-        frame = self.frames["Advanced"]
+        for display_name, value in snap_options:
+            ttk.Radiobutton(snap_frame, text=display_name, 
+                          variable=self.snap_to_var, value=value).pack(anchor="w")
         
-        ttk.Label(frame, text="Advanced Time Selection", font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
+        # Time format options
+        format_frame = ttk.LabelFrame(advanced_frame, text="Time Format", padding="10")
+        format_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Epoch inputs
-        epoch_frame = ttk.LabelFrame(frame, text="Epoch Timestamps", padding=10)
-        epoch_frame.pack(fill=tk.X, pady=(0, 10))
+        self.time_format_var = tk.StringVar(value="splunk")
         
-        # Earliest
-        earliest_frame = ttk.Frame(epoch_frame)
-        earliest_frame.pack(fill=tk.X, pady=5)
+        ttk.Radiobutton(format_frame, text="Splunk relative time (e.g., -24h, now)", 
+                       variable=self.time_format_var, value="splunk").pack(anchor="w")
+        ttk.Radiobutton(format_frame, text="Unix timestamp (epoch)", 
+                       variable=self.time_format_var, value="epoch").pack(anchor="w")
+        ttk.Radiobutton(format_frame, text="ISO format (YYYY-MM-DD HH:MM:SS)", 
+                       variable=self.time_format_var, value="iso").pack(anchor="w")
+    
+    def _create_buttons_frame(self, parent):
+        """Create the buttons frame."""
+        buttons_frame = ttk.Frame(parent)
+        buttons_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(earliest_frame, text="Earliest (epoch):").pack(side=tk.LEFT, anchor="w")
-        self.earliest_epoch = ttk.Entry(earliest_frame, width=15)
-        self.earliest_epoch.pack(side=tk.RIGHT)
+        # Left side buttons
+        left_buttons = ttk.Frame(buttons_frame)
+        left_buttons.pack(side=tk.LEFT)
         
-        # Latest  
-        latest_frame = ttk.Frame(epoch_frame)
-        latest_frame.pack(fill=tk.X, pady=5)
+        ttk.Button(left_buttons, text="Validate", command=self._validate_time_range).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(left_buttons, text="Reset", command=self._reset_to_defaults).pack(side=tk.LEFT)
         
-        ttk.Label(latest_frame, text="Latest (epoch):").pack(side=tk.LEFT, anchor="w")
-        self.latest_epoch = ttk.Entry(latest_frame, width=15)
-        self.latest_epoch.pack(side=tk.RIGHT)
+        # Right side buttons
+        right_buttons = ttk.Frame(buttons_frame)
+        right_buttons.pack(side=tk.RIGHT)
         
-        # Conversion tools
-        tools_frame = ttk.LabelFrame(frame, text="Conversion Tools", padding=10)
-        tools_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(right_buttons, text="OK", command=self._ok_clicked).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(right_buttons, text="Cancel", command=self._cancel_clicked).pack(side=tk.LEFT)
+    
+    def _create_status_frame(self, parent):
+        """Create the status display frame."""
+        status_frame = ttk.LabelFrame(parent, text="Preview", padding="10")
+        status_frame.pack(fill=tk.X)
         
-        # Current time
-        current_frame = ttk.Frame(tools_frame)
-        current_frame.pack(fill=tk.X, pady=2)
+        self.status_text = tk.Text(status_frame, height=2, wrap=tk.WORD, 
+                                 state=tk.DISABLED, bg=status_frame.cget('bg'))
+        self.status_text.pack(fill=tk.X)
+    
+    def _set_defaults(self):
+        """Set default values."""
+        # Set default absolute dates to yesterday and today
+        yesterday = datetime.now() - timedelta(days=1)
+        today = datetime.now()
         
-        current_epoch = int(datetime.now().timestamp())
-        ttk.Label(current_frame, text=f"Current time: {current_epoch}").pack(side=tk.LEFT)
-        ttk.Button(current_frame, text="Use as Latest", width=12,
-                  command=lambda: self.latest_epoch.insert(0, str(current_epoch))).pack(side=tk.RIGHT)
+        self.start_date_var.set(yesterday.strftime('%Y-%m-%d'))
+        self.end_date_var.set(today.strftime('%Y-%m-%d'))
         
-        # 24 hours ago
-        day_ago_frame = ttk.Frame(tools_frame)
-        day_ago_frame.pack(fill=tk.X, pady=2)
+        # Update initial state
+        self._on_custom_type_change()
+        self._on_preset_change()
+    
+    def _bind_events(self):
+        """Bind events for real-time updates."""
+        # Bind Enter key to OK
+        self.dialog.bind('<Return>', lambda e: self._ok_clicked())
+        self.dialog.bind('<Escape>', lambda e: self._cancel_clicked())
         
-        day_ago_epoch = int((datetime.now() - timedelta(days=1)).timestamp())
-        ttk.Label(day_ago_frame, text=f"24 hours ago: {day_ago_epoch}").pack(side=tk.LEFT)
-        ttk.Button(day_ago_frame, text="Use as Earliest", width=12,
-                  command=lambda: self.earliest_epoch.insert(0, str(day_ago_epoch))).pack(side=tk.RIGHT)
-
-    def _build_custom_presets_frame(self):
-        """Build the custom presets management frame."""
-        frame = self.frames["Custom Presets"]
-        
-        ttk.Label(frame, text="Custom Presets", font=('TkDefaultFont', 10, 'bold')).pack(anchor="w", pady=(0, 10))
-        
-        # Custom preset list
-        list_frame = ttk.LabelFrame(frame, text="Saved Presets", padding=5)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Listbox with scrollbar
-        listbox_frame = ttk.Frame(list_frame)
-        listbox_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.custom_listbox = tk.Listbox(listbox_frame, height=8)
-        custom_scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.custom_listbox.yview)
-        self.custom_listbox.configure(yscrollcommand=custom_scrollbar.set)
-        
-        self.custom_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        custom_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Populate custom presets
-        self._refresh_custom_presets_list()
-        
-        # Custom preset buttons
-        btn_frame = ttk.Frame(list_frame)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
-        
-        ttk.Button(btn_frame, text="Use Selected", command=self._use_custom_preset).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="Delete Selected", command=self._delete_custom_preset).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # Save current as preset
-        save_frame = ttk.LabelFrame(frame, text="Save Current Selection", padding=5)
-        save_frame.pack(fill=tk.X)
-        
-        save_input_frame = ttk.Frame(save_frame)
-        save_input_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(save_input_frame, text="Preset name:").pack(side=tk.LEFT)
-        self.custom_name_var = tk.StringVar()
-        custom_name_entry = ttk.Entry(save_input_frame, textvariable=self.custom_name_var, width=25)
-        custom_name_entry.pack(side=tk.LEFT, padx=(10, 10), fill=tk.X, expand=True)
-        
-        ttk.Button(save_input_frame, text="Save", command=self._save_custom_preset).pack(side=tk.RIGHT)
-
-    def show_selected_frame(self):
-        """Show the selected time range input frame."""
-        for frame in self.frames.values():
-            frame.pack_forget()
-        self.frames[self.option_var.get()].pack(fill=tk.BOTH, expand=True)
-
-    def select_preset(self, preset):
-        """Select a predefined time range preset."""
-        splunk_range = self.preset_splunk_ranges.get(preset)
-        if splunk_range:
-            self.result = {"start": splunk_range[0], "end": splunk_range[1]}
-            self.destroy()
-
-    def _quick_select(self, start, end):
-        """Quick select time range from left panel buttons."""
-        self.result = {"start": start, "end": end}
-        self.destroy()
-
-    def _reset_form(self):
-        """Reset all form fields to defaults."""
-        # Reset relative
-        self.relative_amount.delete(0, tk.END)
-        self.relative_amount.insert(0, "1")
-        self.relative_unit.current(1)
-        
-        # Reset dates to today
-        today = datetime.now().date()
-        self.start_date.set_date(today)
-        self.end_date.set_date(today)
-        self.dt_start_date.set_date(today)
-        self.dt_end_date.set_date(today)
-        
-        # Reset times
-        self.dt_start_time.delete(0, tk.END)
-        self.dt_start_time.insert(0, "00:00:00")
-        self.dt_end_time.delete(0, tk.END)
-        self.dt_end_time.insert(0, "23:59:59")
-        
-        # Reset epoch fields
-        self.earliest_epoch.delete(0, tk.END)
-        self.latest_epoch.delete(0, tk.END)
-        
-        # Reset search
-        self.preset_search_var.set("")
-
-    def _preview_time_range(self):
-        """Preview the selected time range."""
-        try:
-            preview_result = self._get_current_selection()
-            if preview_result:
-                start_str = self._format_time_display(preview_result['start'])
-                end_str = self._format_time_display(preview_result['end'])
-                
-                preview_text = f"Time Range Preview:\n\nStart: {start_str}\nEnd: {end_str}"
-                messagebox.showinfo("Time Range Preview", preview_text, parent=self)
-            else:
-                messagebox.showwarning("Preview Error", "Please configure a valid time range first.", parent=self)
-        except Exception as e:
-            messagebox.showerror("Preview Error", f"Error generating preview: {e}", parent=self)
-
-    def _format_time_display(self, time_value):
-        """Format time value for display."""
-        if isinstance(time_value, str):
-            return f"Splunk format: {time_value}"
-        elif isinstance(time_value, datetime):
-            return time_value.strftime("%Y-%m-%d %H:%M:%S %Z")
-        else:
-            return str(time_value)
-
-    def _set_time_field(self, time_value):
-        """Set time field based on current focus."""
-        focused = self.focus_get()
-        if focused == self.dt_start_time:
-            self.dt_start_time.delete(0, tk.END)
-            self.dt_start_time.insert(0, time_value)
-        elif focused == self.dt_end_time:
-            self.dt_end_time.delete(0, tk.END)
-            self.dt_end_time.insert(0, time_value)
-
-    def _load_custom_presets(self):
-        """Load custom presets from file."""
-        if os.path.exists(self.custom_presets_file):
-            try:
-                with open(self.custom_presets_file, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
-
-    def _save_custom_presets(self):
-        """Save custom presets to file."""
-        try:
-            with open(self.custom_presets_file, 'w') as f:
-                json.dump(self.custom_presets, f, indent=4)
-            return True
-        except Exception:
-            return False
-
-    def _refresh_custom_presets_list(self):
-        """Refresh the custom presets listbox."""
-        self.custom_listbox.delete(0, tk.END)
-        for name in sorted(self.custom_presets.keys()):
-            self.custom_listbox.insert(tk.END, name)
-
-    def _use_custom_preset(self):
-        """Use the selected custom preset."""
-        selection = self.custom_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a custom preset to use.", parent=self)
-            return
-        
-        preset_name = self.custom_listbox.get(selection[0])
-        preset_data = self.custom_presets.get(preset_name)
-        
-        if preset_data:
-            self.result = preset_data
-            self.destroy()
-
-    def _delete_custom_preset(self):
-        """Delete the selected custom preset."""
-        selection = self.custom_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select a custom preset to delete.", parent=self)
-            return
-        
-        preset_name = self.custom_listbox.get(selection[0])
-        
-        if messagebox.askyesno("Confirm Delete", f"Delete custom preset '{preset_name}'?", parent=self):
-            del self.custom_presets[preset_name]
-            self._save_custom_presets()
-            self._refresh_custom_presets_list()
-
-    def _save_custom_preset(self):
-        """Save current selection as a custom preset."""
-        name = self.custom_name_var.get().strip()
-        if not name:
-            messagebox.showwarning("Invalid Name", "Please enter a name for the custom preset.", parent=self)
-            return
-        
-        try:
-            current_selection = self._get_current_selection()
-            if current_selection:
-                self.custom_presets[name] = current_selection
-                if self._save_custom_presets():
-                    self._refresh_custom_presets_list()
-                    self.custom_name_var.set("")
-                    messagebox.showinfo("Preset Saved", f"Custom preset '{name}' saved successfully!", parent=self)
-                else:
-                    messagebox.showerror("Save Error", "Failed to save custom preset.", parent=self)
-            else:
-                messagebox.showwarning("Invalid Selection", "Please configure a valid time range first.", parent=self)
-        except Exception as e:
-            messagebox.showerror("Save Error", f"Error saving preset: {e}", parent=self)
-
-    def _get_current_selection(self):
-        """Get the current time range selection."""
-        option = self.option_var.get()
-        
-        try:
-            if option == "Relative":
-                amount_str = self.relative_amount.get()
-                if not amount_str.isdigit() or int(amount_str) < 1:
-                    return None
-                amount = int(amount_str)
-                unit = self.relative_unit.get()
-                unit_map = {
-                    "minutes": "m", "hours": "h", "days": "d",
-                    "weeks": "w", "months": "mon", "years": "y"
-                }
-                if unit not in unit_map:
-                    return None
-                earliest = f"-{amount}{unit_map[unit]}"
-                return {"start": earliest, "end": "now"}
-                
-            elif option == "Date Range":
-                start_date = self.start_date.get_date()
-                end_date = self.end_date.get_date()
-                start = self.est.localize(datetime.combine(start_date, dt_time.min))
-                end = self.est.localize(datetime.combine(end_date, dt_time(23, 59, 59, 999999)))
-                if end < start:
-                    return None
-                return {"start": start, "end": end}
-                
-            elif option == "Date & Time Range":
-                start_date = self.dt_start_date.get_date()
-                end_date = self.dt_end_date.get_date()
-                start_time = self.parse_time(self.dt_start_time.get())
-                end_time = self.parse_time(self.dt_end_time.get())
-                start = self.est.localize(datetime.combine(start_date, start_time))
-                end = self.est.localize(datetime.combine(end_date, end_time))
-                if end <= start:
-                    return None
-                return {"start": start, "end": end}
-                
-            elif option == "Advanced":
-                earliest_str = self.earliest_epoch.get()
-                latest_str = self.latest_epoch.get()
-                if not earliest_str.isdigit() or not latest_str.isdigit():
-                    return None
-                earliest = int(earliest_str)
-                latest = int(latest_str)
-                start = datetime.fromtimestamp(earliest, tz=self.est)
-                end = datetime.fromtimestamp(latest, tz=self.est)
-                if end <= start:
-                    return None
-                return {"start": start, "end": end}
-                
-        except Exception:
-            return None
+        # Bind variable changes for real-time preview
+        for var in [self.relative_start_var, self.relative_end_var, 
+                   self.start_date_var, self.start_time_var,
+                   self.end_date_var, self.end_time_var]:
+            var.trace('w', self._update_preview)
+    
+    def _on_preset_change(self, *args):
+        """Handle preset selection change."""
+        selected = self.preset_var.get()
+        if selected in self.preset_data:
+            data = self.preset_data[selected]
+            description = self._get_preset_description(selected, data)
             
-        return None
-
-    def on_apply(self):
-        """Validate and apply selected time range."""
-        try:
-            result = self._get_current_selection()
-            if result:
-                self.result = result
-                self.destroy()
-            else:
-                messagebox.showerror("Invalid Input", "Please check your time range configuration.", parent=self)
-        except Exception as e:
-            messagebox.showerror("Input Error", f"Invalid time range: {e}", parent=self)
-
-    def parse_time(self, time_str: str) -> dt_time:
-        """Parse time string into time object."""
-        try:
-            parts = time_str.strip().split(':')
-            if len(parts) not in (2, 3):
-                raise ValueError("Invalid time format")
-            hour = int(parts[0])
-            minute = int(parts[1])
-            second = int(parts[2]) if len(parts) == 3 else 0
-            if not (0 <= hour < 24 and 0 <= minute < 60 and 0 <= second < 60):
-                raise ValueError("Time out of range")
-            return dt_time(hour, minute, second)
-        except Exception:
-            raise ValueError("Time must be in HH:MM or HH:MM:SS format")
-
-# Utility functions for time range manipulation
-def splunk_time_to_datetime(splunk_time, timezone="America/New_York"):
-    """Convert Splunk time string to datetime object."""
-    tz = pytz.timezone(timezone)
-    now = datetime.now(tz)
-    
-    if splunk_time == "now":
-        return now
-    elif splunk_time.startswith("-") and splunk_time.endswith(("m", "h", "d", "w")):
-        # Parse relative time
-        unit = splunk_time[-1]
-        amount = int(splunk_time[1:-1])
+            self.preset_description.config(state=tk.NORMAL)
+            self.preset_description.delete(1.0, tk.END)
+            self.preset_description.insert(1.0, description)
+            self.preset_description.config(state=tk.DISABLED)
         
-        if unit == "m":
-            return now - timedelta(minutes=amount)
-        elif unit == "h":
-            return now - timedelta(hours=amount)
-        elif unit == "d":
-            return now - timedelta(days=amount)
-        elif unit == "w":
-            return now - timedelta(weeks=amount)
+        self._update_preview()
     
-    # Handle snap-to operations (@d, @h, etc.)
-    # This is a simplified version - full implementation would be more complex
-    return now
+    def _on_custom_type_change(self, *args):
+        """Handle custom type selection change."""
+        if self.custom_type_var.get() == "relative":
+            self.relative_frame.pack(fill=tk.X, pady=(0, 10))
+            self.absolute_frame.pack_forget()
+        else:
+            self.absolute_frame.pack(fill=tk.X, pady=(0, 10))
+            self.relative_frame.pack_forget()
+        
+        self._update_preview()
+    
+    def _get_preset_description(self, preset_name: str, data: Dict) -> str:
+        """Get description for a preset."""
+        descriptions = {
+            "Last 15 minutes": "Data from 15 minutes ago to now",
+            "Last 30 minutes": "Data from 30 minutes ago to now",
+            "Last 1 hour": "Data from 1 hour ago to now",
+            "Last 4 hours": "Data from 4 hours ago to now",
+            "Last 24 hours": "Data from 24 hours ago to now",
+            "Last 2 days": "Data from 2 days ago to now",
+            "Last 7 days": "Data from 7 days ago to now",
+            "Last 30 days": "Data from 30 days ago to now",
+            "This week": "Data from the start of this week to now",
+            "Last week": "Data from the entire previous week",
+            "This month": "Data from the start of this month to now",
+            "Last month": "Data from the entire previous month",
+            "This year": "Data from the start of this year to now",
+            "Yesterday": "Data from the entire previous day",
+            "Today": "Data from the start of today to now"
+        }
+        
+        base_desc = descriptions.get(preset_name, "Custom time range")
+        splunk_format = f"Earliest: {data['start']}, Latest: {data['end']}"
+        
+        return f"{base_desc}\n\nSplunk format: {splunk_format}"
+    
+    def _update_preview(self, *args):
+        """Update the preview display."""
+        try:
+            result = self._get_current_time_range()
+            if result:
+                preview_text = f"Start: {result['start']}\nEnd: {result['end']}"
+            else:
+                preview_text = "Invalid time range configuration"
+        except Exception as e:
+            preview_text = f"Error: {str(e)}"
+        
+        self.status_text.config(state=tk.NORMAL)
+        self.status_text.delete(1.0, tk.END)
+        self.status_text.insert(1.0, preview_text)
+        self.status_text.config(state=tk.DISABLED)
+    
+    def _get_current_time_range(self) -> Optional[Dict[str, str]]:
+        """Get the current time range configuration."""
+        notebook = self.dialog.nametowidget(self.dialog.winfo_children()[0].winfo_children()[0])
+        current_tab = notebook.index(notebook.select())
+        
+        if current_tab == 0:  # Presets tab
+            selected = self.preset_var.get()
+            if selected in self.preset_data:
+                data = self.preset_data[selected]
+                return {"start": data["start"], "end": data["end"]}
+        
+        elif current_tab == 1:  # Custom tab
+            if self.custom_type_var.get() == "relative":
+                start = self.relative_start_var.get().strip()
+                end = self.relative_end_var.get().strip()
+                
+                if self._validate_relative_time(start) and self._validate_relative_time(end):
+                    return {"start": start, "end": end}
+            
+            else:  # Absolute time
+                try:
+                    start_date = self.start_date_var.get().strip()
+                    start_time = self.start_time_var.get().strip()
+                    end_date = self.end_date_var.get().strip()
+                    end_time = self.end_time_var.get().strip()
+                    
+                    start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M:%S")
+                    end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M:%S")
+                    
+                    if start_dt >= end_dt:
+                        return None
+                    
+                    # Format based on selected format
+                    format_type = self.time_format_var.get()
+                    if format_type == "epoch":
+                        start_str = str(int(start_dt.timestamp()))
+                        end_str = str(int(end_dt.timestamp()))
+                    elif format_type == "iso":
+                        start_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+                        end_str = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    else:  # splunk format
+                        start_str = str(int(start_dt.timestamp()))
+                        end_str = str(int(end_dt.timestamp()))
+                    
+                    return {"start": start_str, "end": end_str}
+                
+                except ValueError:
+                    return None
+        
+        return None
+    
+    def _validate_relative_time(self, time_str: str) -> bool:
+        """Validate relative time format."""
+        if not time_str:
+            return False
+        
+        if time_str.lower() == "now":
+            return True
+        
+        # Pattern for relative time: -<number><unit>[@<snap>]
+        pattern = r'^-?\d+[smhdwMy](@[smhdwMy](\d+)?)?
+            
+        if re.match(pattern, time_str):
+            return True
+        
+        # Pattern for snap to beginning: @<unit>
+        snap_pattern = r'^@[smhdwMy](\d+)?
+            
+        if re.match(snap_pattern, time_str):
+            return True
+        
+        return False
+    
+    def _validate_time_range(self):
+        """Validate the current time range configuration."""
+        result = self._get_current_time_range()
+        
+        if result:
+            messagebox.showinfo("Validation Result", 
+                               f"Time range is valid!\n\nStart: {result['start']}\nEnd: {result['end']}", 
+                               parent=self.dialog)
+        else:
+            messagebox.showerror("Validation Error", 
+                               "Invalid time range configuration. Please check your inputs.", 
+                               parent=self.dialog)
+    
+    def _reset_to_defaults(self):
+        """Reset all fields to default values."""
+        # Reset preset
+        self.preset_var.set("Last 24 hours")
+        
+        # Reset custom relative
+        self.relative_start_var.set("-24h")
+        self.relative_end_var.set("now")
+        
+        # Reset custom absolute
+        yesterday = datetime.now() - timedelta(days=1)
+        today = datetime.now()
+        
+        self.start_date_var.set(yesterday.strftime('%Y-%m-%d'))
+        self.start_time_var.set("00:00:00")
+        self.end_date_var.set(today.strftime('%Y-%m-%d'))
+        self.end_time_var.set("23:59:59")
+        
+        # Reset advanced options
+        self.timezone_var.set("EST")
+        self.snap_to_var.set("none")
+        self.time_format_var.set("splunk")
+        self.custom_type_var.set("relative")
+        
+        # Update UI
+        self._on_custom_type_change()
+        self._on_preset_change()
+    
+    def _ok_clicked(self):
+        """Handle OK button click."""
+        result = self._get_current_time_range()
+        
+        if result:
+            self.result = result
+            logger.info(f"Time range selected: {result['start']} to {result['end']}")
+            self.dialog.destroy()
+        else:
+            messagebox.showerror("Invalid Time Range", 
+                               "Please enter a valid time range configuration.", 
+                               parent=self.dialog)
+    
+    def _cancel_clicked(self):
+        """Handle Cancel button click."""
+        self.result = None
+        self.dialog.destroy()
 
-def format_time_range_display(start, end):
-    """Format time range for display purposes."""
-    if isinstance(start, str) and isinstance(end, str):
-        return f"{start} to {end}"
-    else:
-        start_str = start.strftime("%Y-%m-%d %H:%M:%S") if hasattr(start, 'strftime') else str(start)
-        end_str = end.strftime("%Y-%m-%d %H:%M:%S") if hasattr(end, 'strftime') else str(end)
-        return f"{start_str} to {end_str}"
+class TimeRangeValidator:
+    """Utility class for validating and parsing time ranges."""
+    
+    @staticmethod
+    def validate_splunk_time(time_str: str) -> Tuple[bool, str]:
+        """Validate Splunk time format."""
+        if not time_str or not isinstance(time_str, str):
+            return False, "Time string cannot be empty"
+        
+        time_str = time_str.strip()
+        
+        # "now" is always valid
+        if time_str.lower() == "now":
+            return True, "Valid"
+        
+        # Relative time patterns
+        relative_patterns = [
+            r'^-\d+[smhdwMy]
+            ,           # -24h, -7d, etc.
+            r'^-\d+[smhdwMy]@[smhdwMy]
+            , # -24h@h, -7d@d, etc.
+            r'^@[smhdwMy]
+            ,              # @h, @d, etc.
+            r'^@[smhdwMy]\d+
+                        # @w0, @w1, etc.
+        ]
+        
+        for pattern in relative_patterns:
+            if re.match(pattern, time_str):
+                return True, "Valid relative time format"
+        
+        # Epoch timestamp
+        try:
+            timestamp = int(time_str)
+            if 0 <= timestamp <= 2147483647:  # Valid Unix timestamp range
+                return True, "Valid epoch timestamp"
+        except ValueError:
+            pass
+        
+        return False, f"Invalid time format: {time_str}"
+    
+    @staticmethod
+    def parse_relative_time(time_str: str) -> Optional[timedelta]:
+        """Parse relative time string to timedelta."""
+        if not time_str or time_str.lower() == "now":
+            return timedelta(0)
+        
+        # Extract number and unit
+        match = re.match(r'^-?(\d+)([smhdwMy])', time_str)
+        if not match:
+            return None
+        
+        value = int(match.group(1))
+        unit = match.group(2)
+        
+        unit_multipliers = {
+            's': timedelta(seconds=1),
+            'm': timedelta(minutes=1),
+            'h': timedelta(hours=1),
+            'd': timedelta(days=1),
+            'w': timedelta(weeks=1),
+            'M': timedelta(days=30),  # Approximate month
+            'y': timedelta(days=365)  # Approximate year
+        }
+        
+        if unit in unit_multipliers:
+            return value * unit_multipliers[unit]
+        
+        return None
+    
+    @staticmethod
+    def format_time_for_display(time_str: str) -> str:
+        """Format time string for user display."""
+        try:
+            # Try to parse as epoch timestamp
+            timestamp = int(time_str)
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, OSError):
+            pass
+        
+        # Return as-is for relative times
+        return time_str
+    
+    @staticmethod
+    def get_time_range_duration(start: str, end: str) -> Optional[str]:
+        """Calculate and format the duration of a time range."""
+        try:
+            if start.lower() == "now" or end.lower() == "now":
+                return "Duration includes 'now' - cannot calculate exact duration"
+            
+            # Try parsing as epoch timestamps
+            try:
+                start_ts = int(start)
+                end_ts = int(end)
+                duration_seconds = end_ts - start_ts
+                
+                if duration_seconds < 0:
+                    return "Invalid: End time is before start time"
+                
+                return TimeRangeValidator._format_duration(duration_seconds)
+            except ValueError:
+                pass
+            
+            # Try parsing relative times
+            start_delta = TimeRangeValidator.parse_relative_time(start)
+            end_delta = TimeRangeValidator.parse_relative_time(end)
+            
+            if start_delta is not None and end_delta is not None:
+                duration = abs(end_delta - start_delta)
+                return TimeRangeValidator._format_duration(duration.total_seconds())
+            
+            return "Cannot calculate duration for this time range format"
+            
+        except Exception as e:
+            return f"Error calculating duration: {e}"
+    
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Format duration in seconds to human readable format."""
+        if seconds < 60:
+            return f"{int(seconds)} seconds"
+        elif seconds < 3600:
+            minutes = int(seconds / 60)
+            return f"{minutes} minute{'s' if minutes != 1 else ''}"
+        elif seconds < 86400:
+            hours = int(seconds / 3600)
+            return f"{hours} hour{'s' if hours != 1 else ''}"
+        else:
+            days = int(seconds / 86400)
+            return f"{days} day{'s' if days != 1 else ''}"
+
+class TimeRangePresets:
+    """Predefined time range presets for common use cases."""
+    
+    COMMON_PRESETS = {
+        "realtime": {
+            "name": "Real-time (last 30 seconds)",
+            "start": "-30s",
+            "end": "now",
+            "description": "Continuously updated data from the last 30 seconds"
+        },
+        "last_5min": {
+            "name": "Last 5 minutes",
+            "start": "-5m@m",
+            "end": "now",
+            "description": "Data from 5 minutes ago to now"
+        },
+        "last_hour": {
+            "name": "Last hour",
+            "start": "-1h@h",
+            "end": "now",
+            "description": "Data from 1 hour ago to now"
+        },
+        "business_hours": {
+            "name": "Today's business hours",
+            "start": "@d+9h",
+            "end": "@d+17h",
+            "description": "Today from 9 AM to 5 PM"
+        },
+        "last_business_day": {
+            "name": "Last business day",
+            "start": "-1d@d+9h",
+            "end": "-1d@d+17h",
+            "description": "Previous day from 9 AM to 5 PM"
+        }
+    }
+    
+    @classmethod
+    def get_preset(cls, preset_key: str) -> Optional[Dict]:
+        """Get a preset configuration by key."""
+        return cls.COMMON_PRESETS.get(preset_key)
+    
+    @classmethod
+    def get_all_presets(cls) -> Dict:
+        """Get all available presets."""
+        return cls.COMMON_PRESETS.copy()
+    
+    @classmethod
+    def add_custom_preset(cls, key: str, name: str, start: str, end: str, description: str = ""):
+        """Add a custom preset."""
+        cls.COMMON_PRESETS[key] = {
+            "name": name,
+            "start": start,
+            "end": end,
+            "description": description
+        }
+
+# Utility functions for backward compatibility
+def create_time_range_dialog(parent) -> Optional[Dict[str, str]]:
+    """Create and show time range dialog, return selected range or None."""
+    dialog = TimeRangeDialog(parent)
+    parent.wait_window(dialog.dialog)
+    return dialog.result
+
+def validate_time_range(start: str, end: str) -> Tuple[bool, str]:
+    """Validate a time range."""
+    start_valid, start_msg = TimeRangeValidator.validate_splunk_time(start)
+    if not start_valid:
+        return False, f"Invalid start time: {start_msg}"
+    
+    end_valid, end_msg = TimeRangeValidator.validate_splunk_time(end)
+    if not end_valid:
+        return False, f"Invalid end time: {end_msg}"
+    
+    return True, "Time range is valid"
